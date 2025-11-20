@@ -112,6 +112,53 @@ class StatsManager:
                 ON system_events(event_type)
             """)
             
+            # 恶意请求日志表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS malicious_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    client_ip TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    query_string TEXT,
+                    user_agent TEXT,
+                    threat_type TEXT NOT NULL,
+                    threat_details TEXT,
+                    full_url TEXT,
+                    request_body TEXT,
+                    action_taken TEXT DEFAULT 'blocked'
+                )
+            """)
+            
+            # IP黑名单表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ip_blacklist (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ip_address TEXT UNIQUE NOT NULL,
+                    reason TEXT,
+                    threat_count INTEGER DEFAULT 1,
+                    first_seen TEXT NOT NULL,
+                    last_seen TEXT NOT NULL,
+                    blocked BOOLEAN DEFAULT 1
+                )
+            """)
+            
+            # 创建安全相关的索引
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_malicious_ip 
+                ON malicious_requests(client_ip)
+            """)
+            
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_malicious_timestamp 
+                ON malicious_requests(timestamp)
+            """)
+            
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_blacklist_ip 
+                ON ip_blacklist(ip_address)
+            """)
+            
             conn.commit()
     
     def record_request(
@@ -626,9 +673,191 @@ class StatsManager:
         """获取模型加载历史"""
         return self.get_system_events(limit=limit, event_type="model_load")
     
+    # ==================== 安全日志方法 ====================
+    
+    def log_malicious_request(self, client_ip: str, method: str, path: str, 
+                             query_string: str, user_agent: str, threat_type: str, 
+                             threat_details: str, full_url: str = "", 
+                             request_body: str = "") -> bool:
+        """记录恶意请求到数据库"""
+        try:
+            with self._lock:
+                with self._get_connection() as conn:
+                    cursor = conn.cursor()
+                    
+                    timestamp = datetime.now().isoformat()
+                    
+                    # 记录恶意请求
+                    cursor.execute('''
+                        INSERT INTO malicious_requests 
+                        (timestamp, client_ip, method, path, query_string, user_agent, 
+                         threat_type, threat_details, full_url, request_body)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (timestamp, client_ip, method, path, query_string, user_agent, 
+                          threat_type, threat_details, full_url, request_body))
+                    
+                    # 获取配置
+                    import yaml
+                    try:
+                        with open('api_config.yaml', 'r', encoding='utf-8') as f:
+                            config = yaml.safe_load(f)
+                            security_config = config.get('security_features', {})
+                            threshold = security_config.get('auto_blacklist_threshold', 5)
+                            ip_whitelist = security_config.get('ip_whitelist', ['127.0.0.1', 'localhost', '::1'])
+                    except:
+                        threshold = 5
+                        ip_whitelist = ['127.0.0.1', 'localhost', '::1']
+                    
+                    # IP白名单（不加入黑名单）
+                    if client_ip in ip_whitelist:
+                        conn.commit()
+                        return True
+                    
+                    # 更新或创建IP威胁记录（但不立即加入黑名单）
+                    cursor.execute('SELECT threat_count, blocked FROM ip_blacklist WHERE ip_address = ?', 
+                                 (client_ip,))
+                    result = cursor.fetchone()
+                    
+                    if result:
+                        threat_count = result[0] + 1
+                        # 达到阈值才加入黑名单
+                        blocked = 1 if threat_count >= threshold else 0
+                        cursor.execute('''
+                            UPDATE ip_blacklist 
+                            SET threat_count = ?, last_seen = ?, blocked = ?
+                            WHERE ip_address = ?
+                        ''', (threat_count, timestamp, blocked, client_ip))
+                        
+                        if blocked and result[1] == 0:
+                            print(f"⚠️ IP已加入黑名单 - {client_ip} (威胁次数: {threat_count})")
+                    else:
+                        # 首次记录，不加入黑名单
+                        cursor.execute('''
+                            INSERT INTO ip_blacklist (ip_address, reason, first_seen, last_seen, threat_count, blocked)
+                            VALUES (?, ?, ?, ?, 1, 0)
+                        ''', (client_ip, threat_type, timestamp, timestamp))
+                    
+                    conn.commit()
+                    return True
+        except Exception as e:
+            print(f"❌ 记录恶意请求失败: {e}")
+            return False
+    
+    def is_ip_blacklisted(self, client_ip: str) -> bool:
+        """检查IP是否在黑名单中"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    'SELECT blocked FROM ip_blacklist WHERE ip_address = ? AND blocked = 1', 
+                    (client_ip,)
+                )
+                result = cursor.fetchone()
+                return result is not None
+        except Exception as e:
+            print(f"⚠️ 检查IP黑名单失败: {e}")
+            return False
+    
+    def get_malicious_requests(self, limit: int = 100) -> list:
+        """获取恶意请求日志"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT * FROM malicious_requests 
+                    ORDER BY timestamp DESC 
+                    LIMIT ?
+                ''', (limit,))
+                
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"❌ 获取恶意请求日志失败: {e}")
+            return []
+    
+    def get_blacklist(self) -> list:
+        """获取IP黑名单"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT * FROM ip_blacklist 
+                    WHERE blocked = 1
+                    ORDER BY threat_count DESC
+                ''')
+                
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"❌ 获取IP黑名单失败: {e}")
+            return []
+    
+    def unblock_ip(self, ip_address: str) -> bool:
+        """解除IP黑名单"""
+        try:
+            with self._lock:
+                with self._get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        UPDATE ip_blacklist 
+                        SET blocked = 0
+                        WHERE ip_address = ?
+                    ''', (ip_address,))
+                    
+                    conn.commit()
+                    return True
+        except Exception as e:
+            print(f"❌ 解除IP黑名单失败: {e}")
+            return False
+    
+    def get_security_stats(self) -> Dict:
+        """获取安全统计信息"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 恶意请求总数
+                cursor.execute('SELECT COUNT(*) as count FROM malicious_requests')
+                total_malicious = cursor.fetchone()['count']
+                
+                # 黑名单IP数
+                cursor.execute('SELECT COUNT(*) as count FROM ip_blacklist WHERE blocked = 1')
+                blacklist_count = cursor.fetchone()['count']
+                
+                # 威胁类型统计
+                cursor.execute('''
+                    SELECT threat_type, COUNT(*) as count 
+                    FROM malicious_requests 
+                    GROUP BY threat_type 
+                    ORDER BY count DESC
+                ''')
+                threat_types = [dict(row) for row in cursor.fetchall()]
+                
+                # 最活跃的恶意IP
+                cursor.execute('''
+                    SELECT ip_address, threat_count 
+                    FROM ip_blacklist 
+                    WHERE blocked = 1 
+                    ORDER BY threat_count DESC 
+                    LIMIT 10
+                ''')
+                top_ips = [dict(row) for row in cursor.fetchall()]
+                
+                return {
+                    "total_malicious_requests": total_malicious,
+                    "blacklist_count": blacklist_count,
+                    "threat_types": threat_types,
+                    "top_ips": top_ips
+                }
+        except Exception as e:
+            print(f"❌ 获取安全统计失败: {e}")
+            return {}
+    
     def cleanup_old_records(self, days: int = 30):
         """清理旧记录"""
         cutoff_time = time.time() - (days * 86400)
+        cutoff_datetime = datetime.fromtimestamp(cutoff_time).isoformat()
+        
         with self._lock:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
@@ -647,11 +876,19 @@ class StatsManager:
                 """, (cutoff_time,))
                 deleted_events = cursor.rowcount
                 
+                # 清理恶意请求记录
+                cursor.execute("""
+                    DELETE FROM malicious_requests 
+                    WHERE timestamp < ?
+                """, (cutoff_datetime,))
+                deleted_malicious = cursor.rowcount
+                
                 conn.commit()
                 return {
                     "requests": deleted_requests,
                     "events": deleted_events,
-                    "total": deleted_requests + deleted_events
+                    "malicious": deleted_malicious,
+                    "total": deleted_requests + deleted_events + deleted_malicious
                 }
 
 

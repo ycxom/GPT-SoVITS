@@ -137,7 +137,7 @@ from glob import glob
 from random import choice
 from re import split
 
-# 导入统计模块
+# 导入统计和安全模块
 from api_stats import get_stats_manager, register_stats_routes
 
 # print(sys.path)
@@ -605,7 +605,91 @@ except:
 
 APP = FastAPI()
 
-# 注册统计WebUI路由
+# 安全中间件：检测和阻止恶意请求
+@APP.middleware("http")
+async def security_middleware(request: Request, call_next):
+    """安全中间件：检测恶意请求并记录"""
+    stats_manager = get_stats_manager()
+    client_ip = get_real_ip(request)
+    path = request.url.path
+    
+    # 获取白名单配置
+    whitelist_paths = API_CONFIG.get('security_features', {}).get('whitelist_paths', [
+        '/tts', '/stats', '/security', '/control', 
+        '/set_gpt_weights', '/set_sovits_weights', '/set_refer_audio'
+    ])
+    
+    # 白名单检查：跳过核心API路径的安全检测
+    for whitelist_path in whitelist_paths:
+        if path.startswith(whitelist_path):
+            # 仍然检查IP黑名单
+            if stats_manager.is_ip_blacklisted(client_ip):
+                print(f"🚫 IP黑名单拦截 - IP: {client_ip}, 路径: {path}")
+                return JSONResponse(
+                    status_code=403,
+                    content={"message": "Hacker", "error": "Access denied"}
+                )
+            # 跳过恶意检测，直接处理请求
+            response = await call_next(request)
+            return response
+    
+    # 检查IP是否在黑名单中
+    if stats_manager.is_ip_blacklisted(client_ip):
+        return JSONResponse(
+            status_code=403,
+            content={"message": "Hacker", "error": "Access denied"}
+        )
+    
+    # 获取请求信息
+    query_string = request.url.query or ""
+    method = request.method
+    user_agent = request.headers.get("user-agent", "unknown")
+    full_url = str(request.url)
+    
+    # 尝试读取请求体（仅用于检测，不影响后续处理）
+    request_body = ""
+    try:
+        if method in ["POST", "PUT", "PATCH"]:
+            body = await request.body()
+            request_body = body.decode('utf-8', errors='ignore')[:500]  # 限制长度
+    except:
+        pass
+    
+    # 检测恶意请求（使用security_manager中的方法）
+    from api_stats.security_manager import get_security_manager
+    security_manager = get_security_manager()
+    is_malicious, threat_type, threat_details = security_manager.detect_malicious_request(
+        path, query_string, request_body
+    )
+    
+    if is_malicious:
+        # 记录恶意请求
+        stats_manager.log_malicious_request(
+            client_ip=client_ip,
+            method=method,
+            path=path,
+            query_string=query_string,
+            user_agent=user_agent,
+            threat_type=threat_type,
+            threat_details=threat_details,
+            full_url=full_url,
+            request_body=request_body
+        )
+        
+        # 打印警告日志
+        print(f"🚨 恶意请求已阻止 - IP: {client_ip}, 威胁类型: {threat_type}, 路径: {path}, 详情: {threat_details}")
+        
+        # 返回Hacker响应
+        return JSONResponse(
+            status_code=403,
+            content={"message": "Hacker", "error": "Malicious request detected"}
+        )
+    
+    # 继续处理正常请求
+    response = await call_next(request)
+    return response
+
+# 注册统计WebUI路由（包含安全日志）
 register_stats_routes(APP)
 
 

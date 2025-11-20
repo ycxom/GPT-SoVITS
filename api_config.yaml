@@ -94,6 +94,40 @@ logging:
   # 是否打印请求处理状态（请求ID、完成状态等）
   log_request_status: true
 
+# 安全配置
+security_features:
+  # 是否启用恶意请求检测
+  enable_malicious_detection: true
+
+  # 是否启用IP黑名单
+  enable_ip_blacklist: true
+
+  # 自动黑名单阈值（达到此次数的恶意请求后自动黑名单）
+  # 例如：设置为5表示同一IP发起5次恶意请求后才会被加入黑名单
+  auto_blacklist_threshold: 5
+
+  # 是否记录恶意请求到数据库
+  log_to_database: true
+
+  # IP白名单（永远不会被加入黑名单）
+  # 本地IP默认在白名单中，无需配置
+  ip_whitelist:
+    - 127.0.0.1               # 本地IPv4
+    - ::1                     # 本地IPv6
+    - localhost               # 本地主机名
+    # - 192.168.1.100         # 可以添加其他信任的IP
+
+  # 白名单路径（跳过安全检测以提高性能）
+  # 这些路径只检查IP黑名单，不进行恶意模式检测
+  whitelist_paths:
+    - /tts                    # TTS合成API（文本内容各异，不需要检测）
+    - /stats                  # 统计面板
+    - /security               # 安全面板
+    - /control                # 控制API
+    - /set_gpt_weights        # 模型切换
+    - /set_sovits_weights     # 模型切换
+    - /set_refer_audio        # 参考音频
+
 # 监控和告警
 monitoring:
   # 是否启用监控

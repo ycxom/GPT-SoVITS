@@ -170,6 +170,28 @@ def register_stats_routes(app: FastAPI):
             </html>
         """, status_code=500)
     
+    @app.get("/stats/security", response_class=HTMLResponse)
+    async def security_page(request: Request, stats_auth: str = Cookie(None)):
+        """安全日志页面"""
+        # 检查授权
+        if not check_auth(stats_auth):
+            return RedirectResponse(url="/stats/login")
+        
+        security_html = os.path.join(templates_dir, "security.html")
+        if os.path.exists(security_html):
+            with open(security_html, 'r', encoding='utf-8') as f:
+                return HTMLResponse(content=f.read())
+        
+        return HTMLResponse(content="""
+            <html>
+                <body>
+                    <h1>错误</h1>
+                    <p>模板文件不存在: security.html</p>
+                    <p>请确保 api_stats/templates/security.html 文件存在</p>
+                </body>
+            </html>
+        """, status_code=500)
+    
     # ==================== API 路由 ====================
     
     @app.get("/stats/api")
@@ -307,6 +329,107 @@ def register_stats_routes(app: FastAPI):
                 "message": f"成功清理 {deleted} 条记录",
                 "deleted_count": deleted
             })
+        except Exception as e:
+            return JSONResponse(
+                status_code=500,
+                content={"error": str(e)}
+            )
+    
+    # ==================== 安全相关API ====================
+    
+    @app.get("/security/malicious_requests")
+    async def get_malicious_requests_api(limit: int = 100, stats_auth: str = Cookie(None)):
+        """获取恶意请求日志（使用cookie认证）"""
+        # 检查授权
+        if not check_auth(stats_auth):
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Unauthorized"}
+            )
+        
+        try:
+            stats_manager = get_stats_manager()
+            records = stats_manager.get_malicious_requests(limit)
+            return JSONResponse(content={
+                "total": len(records),
+                "records": records
+            })
+        except Exception as e:
+            return JSONResponse(
+                status_code=500,
+                content={"error": str(e)}
+            )
+    
+    @app.get("/security/blacklist")
+    async def get_blacklist_api(stats_auth: str = Cookie(None)):
+        """获取IP黑名单（使用cookie认证）"""
+        # 检查授权
+        if not check_auth(stats_auth):
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Unauthorized"}
+            )
+        
+        try:
+            stats_manager = get_stats_manager()
+            records = stats_manager.get_blacklist()
+            return JSONResponse(content={
+                "total": len(records),
+                "records": records
+            })
+        except Exception as e:
+            return JSONResponse(
+                status_code=500,
+                content={"error": str(e)}
+            )
+    
+    @app.post("/security/unblock_ip")
+    async def unblock_ip_api(ip_address: str = "", stats_auth: str = Cookie(None)):
+        """解除IP黑名单（使用cookie认证）"""
+        # 检查授权
+        if not check_auth(stats_auth):
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Unauthorized"}
+            )
+        
+        if not ip_address:
+            return JSONResponse(
+                status_code=400,
+                content={"message": "ip_address is required"}
+            )
+        
+        try:
+            stats_manager = get_stats_manager()
+            if stats_manager.unblock_ip(ip_address):
+                return JSONResponse(content={
+                    "message": f"IP {ip_address} has been unblocked"
+                })
+            else:
+                return JSONResponse(
+                    status_code=500,
+                    content={"message": "Failed to unblock IP"}
+                )
+        except Exception as e:
+            return JSONResponse(
+                status_code=500,
+                content={"error": str(e)}
+            )
+    
+    @app.get("/security/stats")
+    async def get_security_stats_api(stats_auth: str = Cookie(None)):
+        """获取安全统计信息（使用cookie认证）"""
+        # 检查授权
+        if not check_auth(stats_auth):
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Unauthorized"}
+            )
+        
+        try:
+            stats_manager = get_stats_manager()
+            stats = stats_manager.get_security_stats()
+            return JSONResponse(content=stats)
         except Exception as e:
             return JSONResponse(
                 status_code=500,
