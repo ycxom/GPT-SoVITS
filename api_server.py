@@ -357,6 +357,14 @@ def load_api_config():
                 'rate_limit_per_minute': 60,
                 'log_requests': True,
                 'blocked_models': []
+            },
+            'logging': {
+                'enable_logging': True,
+                'log_level': 'info',
+                'log_url_requests': True,
+                'log_tts_synthesis': True,
+                'log_api_details': True,
+                'log_request_status': True
             }
         }
         return False
@@ -469,6 +477,27 @@ def get_default_model(text_lang: str = "") -> str:
     # 返回全局默认模型
     return API_CONFIG.get('default_models', {}).get('fallback_model', '蔚蓝档案-中文-心奈')
 
+def should_log(log_type: str) -> bool:
+    """检查是否应该打印指定类型的日志"""
+    logging_config = API_CONFIG.get('logging', {})
+    
+    # 如果日志功能被禁用，不打印任何日志
+    if not logging_config.get('enable_logging', True):
+        return False
+    
+    # 根据日志类型检查配置
+    if log_type == 'url_requests':
+        return logging_config.get('log_url_requests', True)
+    elif log_type == 'tts_synthesis':
+        return logging_config.get('log_tts_synthesis', True)
+    elif log_type == 'api_details':
+        return logging_config.get('log_api_details', True)
+    elif log_type == 'request_status':
+        return logging_config.get('log_request_status', True)
+    
+    # 默认打印
+    return True
+
 def get_model_for_user(api_key: str, text_lang: str, model_name: str = "") -> tuple[str, dict]:
     """
     为用户获取合适的模型，返回(最终模型名, 重定向信息)
@@ -503,7 +532,7 @@ def get_model_for_user(api_key: str, text_lang: str, model_name: str = "") -> tu
             })
             
             # 记录重定向日志
-            if API_CONFIG.get('security', {}).get('log_requests', True):
+            if API_CONFIG.get('security', {}).get('log_requests', True) and should_log('api_details'):
                 print(f"⚠️ 模型重定向 - Key: {api_key[:8]}..., 请求模型: {model_name}, 重定向到: {final_model}")
             
             return final_model, redirect_info
@@ -831,12 +860,14 @@ async def tts_handle(req: dict):
     
     # 调试日志
     request_id = req.get("request_id", "unknown")
-    print(f"🔶 tts_handle 函数被调用 - ID: {request_id[:8] if len(request_id) > 8 else request_id}..., Text: {req.get('text', '')[:30]}...")
+    if should_log('request_status'):
+        print(f"🔶 tts_handle 函数被调用 - ID: {request_id[:8] if len(request_id) > 8 else request_id}..., Text: {req.get('text', '')[:30]}...")
     
     # 检查是否正在处理相同的请求（防止浏览器重复提交）
     if request_id in PROCESSING_REQUESTS:
         wait_time = time.time() - PROCESSING_REQUESTS[request_id]
-        print(f"⚠️ 检测到重复请求 - ID: {request_id[:8]}..., 已等待 {wait_time:.1f}秒")
+        if should_log('request_status'):
+            print(f"⚠️ 检测到重复请求 - ID: {request_id[:8]}..., 已等待 {wait_time:.1f}秒")
         return JSONResponse(
             status_code=409,
             content={
@@ -994,12 +1025,14 @@ async def tts_handle(req: dict):
 
     try:
         # 4. 记录请求日志
-        if API_CONFIG.get('security', {}).get('log_requests', True):
+        if API_CONFIG.get('security', {}).get('log_requests', True) and should_log('api_details'):
             client_ip = req.get("client_ip", "unknown")
             print(f"📊 API调用 - IP: {client_ip}, Key: {user_info['key'][:8]}..., Model: {model_name}, Text: {req.get('text', '')[:20]}...")
         
         # 5. 执行TTS推理
         tts_start_time = time.time()
+        if should_log('tts_synthesis'):
+            print(f"🎤 开始TTS合成 - Model: {model_name}, Text长度: {len(req.get('text', ''))}字符")
         tts_generator = tts_pipeline.run(req)
 
         if streaming_mode:
@@ -1066,12 +1099,14 @@ async def tts_handle(req: dict):
             prompt_text=req.get("prompt_text", "")
         )
         
-        print(f"⏱️  处理时间 - 总计: {total_time:.2f}秒, TTS合成: {tts_time:.2f}秒")
+        if should_log('tts_synthesis'):
+            print(f"⏱️  处理时间 - 总计: {total_time:.2f}秒, TTS合成: {tts_time:.2f}秒")
         
         # 清理处理标记
         if request_id in PROCESSING_REQUESTS:
             del PROCESSING_REQUESTS[request_id]
-            print(f"✅ 请求处理完成 - ID: {request_id[:8]}...")
+            if should_log('request_status'):
+                print(f"✅ 请求处理完成 - ID: {request_id[:8]}...")
         
         return response
         
@@ -1167,7 +1202,8 @@ async def tts_get_endpoint(
     # 生成请求ID（浏览器可以通过 X-Request-ID 头传递，否则自动生成）
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
     
-    print(f"🔵 GET /tts 端点被调用 - ID: {request_id[:8]}..., IP: {client_ip}, Text: {text[:30] if text else 'None'}...")
+    if should_log('url_requests'):
+        print(f"🔵 GET /tts 端点被调用 - ID: {request_id[:8]}..., IP: {client_ip}, Text: {text[:30] if text else 'None'}...")
     
     req = {
         "request_id": request_id,
@@ -1214,7 +1250,8 @@ async def tts_post_endpoint(body: TTS_Request, request: Request):
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
     req["request_id"] = request_id
     
-    print(f"🟢 POST /tts 端点被调用 - ID: {request_id[:8]}..., IP: {client_ip}, Text: {req.get('text', '')[:30]}...")
+    if should_log('url_requests'):
+        print(f"🟢 POST /tts 端点被调用 - ID: {request_id[:8]}..., IP: {client_ip}, Text: {req.get('text', '')[:30]}...")
     
     # 如果 text_lang 为空，自动设置为智能语言识别模式
     if not req.get("text_lang"):
@@ -1335,7 +1372,25 @@ if __name__ == "__main__":
     try:
         if host == "None":  # 在调用时使用 -a None 参数，可以让api监听双栈
             host = None
-        uvicorn.run(app=APP, host=host, port=port, workers=1, proxy_headers=True, forwarded_allow_ips='*')
+        
+        # 根据配置决定uvicorn的日志级别
+        logging_config = API_CONFIG.get('logging', {})
+        if not logging_config.get('log_url_requests', True):
+            # 如果关闭URL请求日志，设置uvicorn为warning级别（不显示访问日志）
+            log_level = "warning"
+        else:
+            log_level = "info"
+        
+        uvicorn.run(
+            app=APP, 
+            host=host, 
+            port=port, 
+            workers=1, 
+            proxy_headers=True, 
+            forwarded_allow_ips='*',
+            log_level=log_level,
+            access_log=logging_config.get('log_url_requests', True)
+        )
     except Exception:
         traceback.print_exc()
         os.kill(os.getpid(), signal.SIGTERM)

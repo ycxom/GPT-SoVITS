@@ -74,6 +74,26 @@ security:
   # 被禁止的模型列表
   blocked_models: []
 
+# 日志配置
+logging:
+  # 是否启用日志
+  enable_logging: true
+
+  # 日志级别：debug, info, warning, error
+  log_level: "info"
+
+  # 是否打印URL请求日志（GET/POST端点调用）
+  log_url_requests: true
+
+  # 是否打印TTS合成日志（合成开始、处理时间等）
+  log_tts_synthesis: true
+
+  # 是否打印API调用详情（IP、Key、Model、Text等）
+  log_api_details: true
+
+  # 是否打印请求处理状态（请求ID、完成状态等）
+  log_request_status: true
+
 # 监控和告警
 monitoring:
   # 是否启用监控
