@@ -107,10 +107,12 @@ import os
 import sys
 import traceback
 import re
+import time
 from typing import Generator
 from collections import defaultdict
 from datetime import datetime, timedelta
 import yaml
+import uuid
 
 now_dir = os.getcwd()
 sys.path.append(now_dir)
@@ -134,6 +136,9 @@ from pathlib import Path
 from glob import glob
 from random import choice
 from re import split
+
+# 导入统计模块
+from api_stats import get_stats_manager, register_stats_routes
 
 # print(sys.path)
 i18n = I18nAuto()
@@ -315,6 +320,7 @@ def auto_get_all_parameters(model_name: str = "", emotion: str = "默认", versi
 API_CONFIG = {}
 USAGE_STATS = defaultdict(list)
 RATE_LIMIT = defaultdict(list)
+PROCESSING_REQUESTS = {}  # 正在处理的请求（用于去重）
 
 def load_api_config():
     """加载API配置文件"""
@@ -523,11 +529,55 @@ if config_path in [None, ""]:
 # 加载API配置文件
 load_api_config()
 
+# 记录服务启动事件
+try:
+    from api_stats import get_stats_manager
+    stats_manager_init = get_stats_manager()
+    stats_manager_init.log_system_event(
+        event_type="server_start",
+        event_name="API服务启动",
+        details=f"配置文件: {config_path}, 端口: {port}",
+        status="success"
+    )
+except Exception as e:
+    print(f"⚠️ 无法记录启动事件: {e}")
+
+# 记录TTS配置加载
+import time as time_module
+load_start = time_module.time()
 tts_config = TTS_Config(config_path)
 print(tts_config)
+
+try:
+    stats_manager_init.log_system_event(
+        event_type="model_load",
+        event_name="TTS配置加载",
+        details=f"版本: {tts_config.version}",
+        status="success",
+        duration=time_module.time() - load_start
+    )
+except:
+    pass
+
+# 记录TTS Pipeline初始化
+pipeline_start = time_module.time()
 tts_pipeline = TTS(tts_config)
 
+try:
+    stats_manager_init.log_system_event(
+        event_type="model_load",
+        event_name="TTS Pipeline初始化",
+        details="GPT-SoVITS模型加载完成",
+        status="success",
+        duration=time_module.time() - pipeline_start
+    )
+except:
+    pass
+
 APP = FastAPI()
+
+# 注册统计WebUI路由
+register_stats_routes(APP)
 
 
 class TTS_Request(BaseModel):
@@ -774,7 +824,32 @@ async def tts_handle(req: dict):
     returns:
         StreamingResponse: audio stream response.
     """
-
+    
+    # 记录开始时间用于统计
+    start_time = time.time()
+    stats_manager = get_stats_manager()
+    
+    # 调试日志
+    request_id = req.get("request_id", "unknown")
+    print(f"🔶 tts_handle 函数被调用 - ID: {request_id[:8] if len(request_id) > 8 else request_id}..., Text: {req.get('text', '')[:30]}...")
+    
+    # 检查是否正在处理相同的请求（防止浏览器重复提交）
+    if request_id in PROCESSING_REQUESTS:
+        wait_time = time.time() - PROCESSING_REQUESTS[request_id]
+        print(f"⚠️ 检测到重复请求 - ID: {request_id[:8]}..., 已等待 {wait_time:.1f}秒")
+        return JSONResponse(
+            status_code=409,
+            content={
+                "message": "Request is already being processed",
+                "request_id": request_id,
+                "wait_time": f"{wait_time:.1f}s",
+                "tip": "请等待当前请求完成，不要重复提交"
+            }
+        )
+    
+    # 标记请求正在处理
+    PROCESSING_REQUESTS[request_id] = time.time()
+    
     # ========== 企业级功能集成 ==========
     
     # 1. API Key认证
@@ -783,12 +858,53 @@ async def tts_handle(req: dict):
     
     if not user_info['valid']:
         error_message = user_info.get('error', 'Authentication failed')
+        text = req.get("text", "")
+        text_preview = text[:100] if len(text) > 100 else text
+        text_full = text
+        
+        # 记录失败的认证尝试
+        stats_manager.record_request(
+            api_key=api_key or "anonymous",
+            model_name=req.get("model_name", ""),
+            text_length=len(text),
+            processing_time=time.time() - start_time,
+            success=False,
+            error_message=error_message,
+            client_ip=req.get("client_ip", "unknown"),
+            text_lang=req.get("text_lang", ""),
+            media_type=req.get("media_type", "wav"),
+            text_preview=text_preview,
+            text_full=text_full,
+            ref_audio_path=req.get("ref_audio_path", ""),
+            prompt_text=req.get("prompt_text", "")
+        )
         return JSONResponse(status_code=401, content={"message": error_message})
     
     # 2. 速率限制检查
     if not check_rate_limit(user_info['key']):
+        text = req.get("text", "")
+        text_preview = text[:100] if len(text) > 100 else text
+        text_full = text
+        
+        # 记录被限流的请求
+        stats_manager.record_request(
+            api_key=user_info['key'],
+            model_name=req.get("model_name", ""),
+            text_length=len(text),
+            processing_time=time.time() - start_time,
+            success=False,
+            error_message="Rate limit exceeded",
+            client_ip=req.get("client_ip", "unknown"),
+            text_lang=req.get("text_lang", ""),
+            media_type=req.get("media_type", "wav"),
+            text_preview=text_preview,
+            text_full=text_full,
+            ref_audio_path=req.get("ref_audio_path", ""),
+            prompt_text=req.get("prompt_text", "")
+        )
         return JSONResponse(status_code=429, content={"message": "Rate limit exceeded"})
     
+
     # 3. 模型权限检查和获取
     model_name = req.get("model_name", "")
     text_lang = req.get("text_lang", "")
@@ -829,6 +945,27 @@ async def tts_handle(req: dict):
     
     check_res = check_params(req)
     if check_res is not None:
+        text = req.get("text", "")
+        text_preview = text[:100] if len(text) > 100 else text
+        text_full = text
+        
+        # 记录参数验证失败
+        stats_manager.record_request(
+            api_key=user_info['key'],
+            model_name=model_name,
+            text_length=len(text),
+            processing_time=time.time() - start_time,
+            success=False,
+            error_message="Parameter validation failed",
+            client_ip=req.get("client_ip", "unknown"),
+            text_lang=req.get("text_lang", ""),
+            media_type=media_type,
+            text_preview=text_preview,
+            text_full=text_full,
+            ref_audio_path=req.get("ref_audio_path", ""),
+            prompt_text=req.get("prompt_text", "")
+        )
+        
         # 如果是重定向情况且参数验证失败，仍然需要添加重定向头信息
         if redirect_info["redirected"]:
             # 获取原始响应的内容和状态码
@@ -850,7 +987,6 @@ async def tts_handle(req: dict):
                 media_type="application/json"
             )
         
-        update_usage_stats(user_info['key'], model_name, False)
         return check_res
 
     if streaming_mode or return_fragment:
@@ -863,6 +999,7 @@ async def tts_handle(req: dict):
             print(f"📊 API调用 - IP: {client_ip}, Key: {user_info['key'][:8]}..., Model: {model_name}, Text: {req.get('text', '')[:20]}...")
         
         # 5. 执行TTS推理
+        tts_start_time = time.time()
         tts_generator = tts_pipeline.run(req)
 
         if streaming_mode:
@@ -905,14 +1042,65 @@ async def tts_handle(req: dict):
             audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
             response = Response(audio_data, media_type=f"audio/{media_type}", headers=headers)
         
-        # 6. 更新使用统计
-        update_usage_stats(user_info['key'], model_name, True)
+        # 6. 记录成功的请求统计（在完成所有处理后记录）
+        tts_time = time.time() - tts_start_time
+        total_time = time.time() - start_time
+        text = req.get("text", "")
+        text_preview = text[:100] if len(text) > 100 else text
+        text_full = text
+        
+        stats_manager.record_request(
+            api_key=user_info['key'],
+            model_name=model_name,
+            text_length=len(text),
+            processing_time=total_time,
+            success=True,
+            error_message=None,
+            client_ip=req.get("client_ip", "unknown"),
+            text_lang=req.get("text_lang", ""),
+            media_type=media_type,
+            text_preview=text_preview,
+            text_full=text_full,
+            tts_time=tts_time,
+            ref_audio_path=req.get("ref_audio_path", ""),
+            prompt_text=req.get("prompt_text", "")
+        )
+        
+        print(f"⏱️  处理时间 - 总计: {total_time:.2f}秒, TTS合成: {tts_time:.2f}秒")
+        
+        # 清理处理标记
+        if request_id in PROCESSING_REQUESTS:
+            del PROCESSING_REQUESTS[request_id]
+            print(f"✅ 请求处理完成 - ID: {request_id[:8]}...")
         
         return response
         
     except Exception as e:
-        # 7. 错误统计
-        update_usage_stats(user_info['key'], model_name, False)
+        # 8. 记录失败的请求统计
+        processing_time = time.time() - start_time
+        text = req.get("text", "")
+        text_preview = text[:100] if len(text) > 100 else text
+        text_full = text  # 保存完整文本
+        
+        stats_manager.record_request(
+            api_key=user_info['key'],
+            model_name=model_name,
+            text_length=len(text),
+            processing_time=processing_time,
+            success=False,
+            error_message=str(e),
+            client_ip=req.get("client_ip", "unknown"),
+            text_lang=req.get("text_lang", ""),
+            media_type=media_type,
+            text_preview=text_preview,
+            text_full=text_full,
+            ref_audio_path=req.get("ref_audio_path", ""),
+            prompt_text=req.get("prompt_text", "")
+        )
+        
+        # 清理处理标记
+        if request_id in PROCESSING_REQUESTS:
+            del PROCESSING_REQUESTS[request_id]
         
         # 如果是重定向情况，在异常响应中也添加重定向头信息
         if redirect_info["redirected"]:
@@ -975,7 +1163,14 @@ async def tts_get_endpoint(
         text_lang = "auto"
     
     client_ip = get_real_ip(request)
+    
+    # 生成请求ID（浏览器可以通过 X-Request-ID 头传递，否则自动生成）
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    
+    print(f"🔵 GET /tts 端点被调用 - ID: {request_id[:8]}..., IP: {client_ip}, Text: {text[:30] if text else 'None'}...")
+    
     req = {
+        "request_id": request_id,
         "client_ip": client_ip,
         "text": text,
         "text_lang": text_lang.lower(),
@@ -1015,6 +1210,12 @@ async def tts_post_endpoint(body: TTS_Request, request: Request):
     client_ip = get_real_ip(request)
     req["client_ip"] = client_ip
     
+    # 生成请求ID
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    req["request_id"] = request_id
+    
+    print(f"🟢 POST /tts 端点被调用 - ID: {request_id[:8]}..., IP: {client_ip}, Text: {req.get('text', '')[:30]}...")
+    
     # 如果 text_lang 为空，自动设置为智能语言识别模式
     if not req.get("text_lang"):
         req["text_lang"] = "auto"
@@ -1052,11 +1253,39 @@ async def set_refer_aduio(refer_audio_path: str = None):
 
 @APP.get("/set_gpt_weights")
 async def set_gpt_weights(weights_path: str = None):
+    load_start = time.time()
     try:
         if weights_path in ["", None]:
             return JSONResponse(status_code=400, content={"message": "gpt weight path is required"})
+        
         tts_pipeline.init_t2s_weights(weights_path)
+        
+        # 记录GPT模型加载成功
+        try:
+            stats_manager = get_stats_manager()
+            stats_manager.log_system_event(
+                event_type="model_switch",
+                event_name="GPT模型切换",
+                details=f"模型路径: {weights_path}",
+                status="success",
+                duration=time.time() - load_start
+            )
+        except:
+            pass
+            
     except Exception as e:
+        # 记录GPT模型加载失败
+        try:
+            stats_manager = get_stats_manager()
+            stats_manager.log_system_event(
+                event_type="model_switch",
+                event_name="GPT模型切换失败",
+                details=f"模型路径: {weights_path}, 错误: {str(e)}",
+                status="failed",
+                duration=time.time() - load_start
+            )
+        except:
+            pass
         return JSONResponse(status_code=400, content={"message": "change gpt weight failed", "Exception": str(e)})
 
     return JSONResponse(status_code=200, content={"message": "success"})
@@ -1064,12 +1293,41 @@ async def set_gpt_weights(weights_path: str = None):
 
 @APP.get("/set_sovits_weights")
 async def set_sovits_weights(weights_path: str = None):
+    load_start = time.time()
     try:
         if weights_path in ["", None]:
             return JSONResponse(status_code=400, content={"message": "sovits weight path is required"})
+        
         tts_pipeline.init_vits_weights(weights_path)
+        
+        # 记录SoVITS模型加载成功
+        try:
+            stats_manager = get_stats_manager()
+            stats_manager.log_system_event(
+                event_type="model_switch",
+                event_name="SoVITS模型切换",
+                details=f"模型路径: {weights_path}",
+                status="success",
+                duration=time.time() - load_start
+            )
+        except:
+            pass
+            
     except Exception as e:
+        # 记录SoVITS模型加载失败
+        try:
+            stats_manager = get_stats_manager()
+            stats_manager.log_system_event(
+                event_type="model_switch",
+                event_name="SoVITS模型切换失败",
+                details=f"模型路径: {weights_path}, 错误: {str(e)}",
+                status="failed",
+                duration=time.time() - load_start
+            )
+        except:
+            pass
         return JSONResponse(status_code=400, content={"message": "change sovits weight failed", "Exception": str(e)})
+    
     return JSONResponse(status_code=200, content={"message": "success"})
 
 

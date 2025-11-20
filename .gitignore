@@ -196,3 +196,10 @@ cython_debug/
 
 # model list
 models
+
+# API统计数据库文件
+api_stats.db
+api_stats.db-journal
+api_stats.db-shm
+api_stats.db-wal
+api_stats/test_*.db

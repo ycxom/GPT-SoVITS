@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API统计仪表板</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/stats/static/dashboard.css">
+    <script>
+        // 背景图片缓存管理 - 使用 IndexedDB 存储图片
+        (function() {
+            const CACHE_KEY = 'stats_bg_data';
+            const CACHE_TIME_KEY = 'stats_bg_time';
+            const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24小时
+            
+            const now = Date.now();
+            const cachedTime = localStorage.getItem(CACHE_TIME_KEY);
+            
+            // 设置背景图片（淡入动画）
+            function setBackground(dataUrl) {
+                const applyBg = function() {
+                    // 先设置透明度为0
+                    document.body.style.opacity = '0';
+                    // 设置背景图片
+                    document.body.style.backgroundImage = `linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.6)), url(${dataUrl})`;
+                    // 触发淡入动画
+                    setTimeout(() => {
+                        document.body.style.transition = 'opacity 1s ease-in-out';
+                        document.body.style.opacity = '1';
+                    }, 50);
+                };
+                
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', applyBg);
+                } else {
+                    applyBg();
+                }
+            }
+            
+            // 检查缓存是否有效
+            if (cachedTime && (now - parseInt(cachedTime)) < CACHE_DURATION) {
+                // 尝试从 localStorage 读取缓存
+                const cachedData = localStorage.getItem(CACHE_KEY);
+                if (cachedData) {
+                    setBackground(cachedData);
+                    return;
+                }
+            }
+            
+            // 获取新图片并缓存
+            fetch('https://www.loliapi.com/acg/')
+                .then(response => response.blob())
+                .then(blob => {
+                    const reader = new FileReader();
+                    reader.onloadend = function() {
+                        const dataUrl = reader.result;
+                        // 保存到 localStorage（如果图片不太大）
+                        try {
+                            localStorage.setItem(CACHE_KEY, dataUrl);
+                            localStorage.setItem(CACHE_TIME_KEY, now.toString());
+                        } catch (e) {
+                            console.warn('图片太大，无法缓存到 localStorage');
+                        }
+                        setBackground(dataUrl);
+                    };
+                    reader.readAsDataURL(blob);
+                })
+                .catch(err => {
+                    console.error('加载背景图片失败:', err);
+                });
+        })();
+    </script>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 API统计仪表板</h1>
+            <p>实时监控API请求和性能指标</p>
+            <div class="nav">
+                <a href="/stats/requests">📋 查看全部请求</a>
+            </div>
+        </div>
+        
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <p>加载统计数据中...</p>
+        </div>
+        
+        <div id="content" style="display: none;">
+            <!-- 核心指标 -->
+            <div class="stats-grid">
+                <div class="stat-card info">
+                    <div class="label">总请求数</div>
+                    <div class="value" id="total-requests">0</div>
+                    <div class="unit">次</div>
+                </div>
+                
+                <div class="stat-card success">
+                    <div class="label">成功率</div>
+                    <div class="value" id="success-rate">0</div>
+                    <div class="unit">%</div>
+                </div>
+                
+                <div class="stat-card warning">
+                    <div class="label">平均处理时间</div>
+                    <div class="value" id="avg-time">0</div>
+                    <div class="unit">秒</div>
+                </div>
+                
+                <div class="stat-card info">
+                    <div class="label">每分钟请求数</div>
+                    <div class="value" id="rpm">0</div>
+                    <div class="unit">次/分钟</div>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="label">运行时长</div>
+                    <div class="value" style="font-size: 1.5em;" id="uptime">-</div>
+                </div>
+            </div>
+            
+            <!-- 图表展示区 -->
+            <div class="charts-grid">
+                <div class="chart-card">
+                    <h3>📊 请求状态分布</h3>
+                    <div class="chart-container">
+                        <canvas id="statusPieChart"></canvas>
+                    </div>
+                </div>
+                
+                <div class="chart-card">
+                    <h3>📈 24小时请求趋势</h3>
+                    <div class="chart-container">
+                        <canvas id="hourlyLineChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="charts-grid">
+                <div class="chart-card">
+                    <h3>🤖 模型使用分布</h3>
+                    <div class="chart-container">
+                        <canvas id="modelPieChart"></canvas>
+                    </div>
+                </div>
+                
+                <div class="chart-card">
+                    <h3>⚡ 处理时间趋势</h3>
+                    <div class="chart-container">
+                        <canvas id="processingTimeChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 模型统计 -->
+            <div class="section">
+                <h2>🤖 模型使用统计</h2>
+                <table id="model-stats">
+                    <thead>
+                        <tr>
+                            <th>模型名称</th>
+                            <th>请求次数</th>
+                            <th>成功次数</th>
+                            <th>成功率</th>
+                            <th>平均处理时间</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            
+            <!-- API Key统计 -->
+            <div class="section">
+                <h2>🔑 API Key使用统计</h2>
+                <table id="apikey-stats">
+                    <thead>
+                        <tr>
+                            <th>API Key</th>
+                            <th>请求次数</th>
+                            <th>成功次数</th>
+                            <th>成功率</th>
+                            <th>平均处理时间</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            
+            <!-- 每小时统计 -->
+            <div class="section">
+                <h2>📈 24小时请求趋势</h2>
+                <table id="hourly-stats">
+                    <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>请求次数</th>
+                            <th>成功次数</th>
+                            <th>成功率</th>
+                            <th>平均处理时间</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            
+            <!-- IP统计 -->
+            <div class="section">
+                <h2>🌐 IP请求统计（Top 50）</h2>
+                <table id="ip-stats">
+                    <thead>
+                        <tr>
+                            <th>IP地址</th>
+                            <th>请求次数</th>
+                            <th>成功次数</th>
+                            <th>成功率</th>
+                            <th>平均处理时间</th>
+                            <th>最后请求时间</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            
+            <!-- 最近请求 -->
+            <div class="section">
+                <h2>📋 最近请求记录（最新20条）</h2>
+                <div style="overflow-x: auto;">
+                    <table id="recent-requests">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>IP地址</th>
+                                <th>API Key</th>
+                                <th>模型</th>
+                                <th>文本长度</th>
+                                <th>语言</th>
+                                <th>格式</th>
+                                <th>处理时间</th>
+                                <th>状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- 系统事件日志 -->
+            <div class="section">
+                <h2>📋 系统事件日志（最新30条）</h2>
+                <table id="system-events">
+                    <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>类型</th>
+                            <th>事件名称</th>
+                            <th>详情</th>
+                            <th>状态</th>
+                            <th>耗时</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            
+            <!-- 最近错误 -->
+            <div class="section">
+                <h2>❌ 最近错误记录</h2>
+                <div id="recent-errors"></div>
+            </div>
+        </div>
+        
+        <button class="refresh-btn" onclick="loadStats()">🔄 刷新数据</button>
+    </div>
+    
+    <!-- 请求详情模态框 -->
+    <div id="detail-modal" class="modal">
+        <div class="modal-content">
+            <button onclick="closeDetailModal()" class="modal-close">✕ 关闭</button>
+            <h2 style="margin-bottom: 20px; color: #333;">📋 请求详情</h2>
+            <div id="detail-content" style="line-height: 1.8;"></div>
+        </div>
+    </div>
+    
+    <script src="/stats/static/dashboard.js"></script>
+</body>
+</html>

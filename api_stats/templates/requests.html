@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>请求列表 - API统计</title>
+    <link rel="stylesheet" href="/stats/static/requests.css">
+    <script>
+        // 背景图片缓存管理 - 使用 IndexedDB 存储图片
+        (function() {
+            const CACHE_KEY = 'stats_bg_data';
+            const CACHE_TIME_KEY = 'stats_bg_time';
+            const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24小时
+            
+            const now = Date.now();
+            const cachedTime = localStorage.getItem(CACHE_TIME_KEY);
+            
+            // 设置背景图片（淡入动画）
+            function setBackground(dataUrl) {
+                const applyBg = function() {
+                    // 先设置透明度为0
+                    document.body.style.opacity = '0';
+                    // 设置背景图片
+                    document.body.style.backgroundImage = `linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.6)), url(${dataUrl})`;
+                    // 触发淡入动画
+                    setTimeout(() => {
+                        document.body.style.transition = 'opacity 1s ease-in-out';
+                        document.body.style.opacity = '1';
+                    }, 50);
+                };
+                
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', applyBg);
+                } else {
+                    applyBg();
+                }
+            }
+            
+            // 检查缓存是否有效
+            if (cachedTime && (now - parseInt(cachedTime)) < CACHE_DURATION) {
+                // 尝试从 localStorage 读取缓存
+                const cachedData = localStorage.getItem(CACHE_KEY);
+                if (cachedData) {
+                    setBackground(cachedData);
+                    return;
+                }
+            }
+            
+            // 获取新图片并缓存
+            fetch('https://www.loliapi.com/acg/')
+                .then(response => response.blob())
+                .then(blob => {
+                    const reader = new FileReader();
+                    reader.onloadend = function() {
+                        const dataUrl = reader.result;
+                        // 保存到 localStorage（如果图片不太大）
+                        try {
+                            localStorage.setItem(CACHE_KEY, dataUrl);
+                            localStorage.setItem(CACHE_TIME_KEY, now.toString());
+                        } catch (e) {
+                            console.warn('图片太大，无法缓存到 localStorage');
+                        }
+                        setBackground(dataUrl);
+                    };
+                    reader.readAsDataURL(blob);
+                })
+                .catch(err => {
+                    console.error('加载背景图片失败:', err);
+                });
+        })();
+    </script>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📋 请求列表</h1>
+            <p>查看和管理所有API请求记录</p>
+            <div class="nav">
+                <a href="/stats">← 返回仪表板</a>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <div>
+                <label>显示数量:</label>
+                <select id="page-size" onchange="changePageSize()">
+                    <option value="20" selected>20条</option>
+                    <option value="30">30条</option>
+                    <option value="50">50条</option>
+                    <option value="100">100条</option>
+                </select>
+            </div>
+            
+            <div>
+                <label>筛选状态:</label>
+                <select id="filter-status" onchange="loadRequests()">
+                    <option value="all">全部</option>
+                    <option value="success">成功</option>
+                    <option value="failed">失败</option>
+                </select>
+            </div>
+            
+            <div>
+                <button onclick="loadRequests()">🔄 刷新</button>
+                <button onclick="exportData()">📥 导出</button>
+            </div>
+        </div>
+        
+        <div class="table-container">
+            <div id="loading" class="loading">
+                <p>加载中...</p>
+            </div>
+            
+            <table id="requests-table" style="display: none;">
+                <thead>
+                    <tr>
+                        <th class="sortable" data-sort="id">ID</th>
+                        <th class="sortable" data-sort="timestamp">时间</th>
+                        <th class="sortable" data-sort="client_ip">IP地址</th>
+                        <th class="sortable" data-sort="api_key">API Key</th>
+                        <th class="sortable" data-sort="model_name">模型</th>
+                        <th class="sortable" data-sort="text_length">文本长度</th>
+                        <th class="sortable" data-sort="text_lang">语言</th>
+                        <th class="sortable" data-sort="media_type">格式</th>
+                        <th class="sortable" data-sort="processing_time">总时间</th>
+                        <th class="sortable" data-sort="tts_time">TTS时间</th>
+                        <th class="sortable" data-sort="success">状态</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="table-body"></tbody>
+            </table>
+        </div>
+        
+        <div class="pagination" id="pagination"></div>
+    </div>
+    
+    <!-- 详情模态框 -->
+    <div id="detail-modal" class="modal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeModal()">✕ 关闭</button>
+            <h2 style="margin-bottom: 20px;">📋 请求详情</h2>
+            <div id="detail-content"></div>
+        </div>
+    </div>
+    
+    <script src="/stats/static/requests.js"></script>
+</body>
+</html>
