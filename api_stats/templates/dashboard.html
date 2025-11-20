@@ -4,72 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>API统计仪表板</title>
+    <link rel="icon" href="https://ghfast.top/https://raw.githubusercontent.com/ycxom/VPetLLM/refs/heads/main/3000_VPetLLM/icon.png">
+    <link rel="stylesheet" href="/stats/static/common.css">
+    <script src="/stats/static/common.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <link rel="stylesheet" href="/stats/static/dashboard.css">
-    <script>
-        // 背景图片缓存管理 - 使用 IndexedDB 存储图片
-        (function() {
-            const CACHE_KEY = 'stats_bg_data';
-            const CACHE_TIME_KEY = 'stats_bg_time';
-            const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24小时
-            
-            const now = Date.now();
-            const cachedTime = localStorage.getItem(CACHE_TIME_KEY);
-            
-            // 设置背景图片（淡入动画）
-            function setBackground(dataUrl) {
-                const applyBg = function() {
-                    // 先设置透明度为0
-                    document.body.style.opacity = '0';
-                    // 设置背景图片
-                    document.body.style.backgroundImage = `linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.6)), url(${dataUrl})`;
-                    // 触发淡入动画
-                    setTimeout(() => {
-                        document.body.style.transition = 'opacity 1s ease-in-out';
-                        document.body.style.opacity = '1';
-                    }, 50);
-                };
-                
-                if (document.readyState === 'loading') {
-                    document.addEventListener('DOMContentLoaded', applyBg);
-                } else {
-                    applyBg();
-                }
-            }
-            
-            // 检查缓存是否有效
-            if (cachedTime && (now - parseInt(cachedTime)) < CACHE_DURATION) {
-                // 尝试从 localStorage 读取缓存
-                const cachedData = localStorage.getItem(CACHE_KEY);
-                if (cachedData) {
-                    setBackground(cachedData);
-                    return;
-                }
-            }
-            
-            // 获取新图片并缓存
-            fetch('https://www.loliapi.com/acg/')
-                .then(response => response.blob())
-                .then(blob => {
-                    const reader = new FileReader();
-                    reader.onloadend = function() {
-                        const dataUrl = reader.result;
-                        // 保存到 localStorage（如果图片不太大）
-                        try {
-                            localStorage.setItem(CACHE_KEY, dataUrl);
-                            localStorage.setItem(CACHE_TIME_KEY, now.toString());
-                        } catch (e) {
-                            console.warn('图片太大，无法缓存到 localStorage');
-                        }
-                        setBackground(dataUrl);
-                    };
-                    reader.readAsDataURL(blob);
-                })
-                .catch(err => {
-                    console.error('加载背景图片失败:', err);
-                });
-        })();
-    </script>
 </head>
 <body>
     <div class="container">

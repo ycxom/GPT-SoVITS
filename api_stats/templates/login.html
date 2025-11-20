@@ -4,126 +4,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>统计面板登录</title>
-    <script>
-        // 背景图片缓存管理 - 使用 IndexedDB 存储图片
-        (function() {
-            const CACHE_KEY = 'stats_bg_data';
-            const CACHE_TIME_KEY = 'stats_bg_time';
-            const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24小时
-            
-            const now = Date.now();
-            const cachedTime = localStorage.getItem(CACHE_TIME_KEY);
-            
-            // 设置背景图片（淡入动画）
-            function setBackground(dataUrl) {
-                const applyBg = function() {
-                    // 先设置透明度为0
-                    document.body.style.opacity = '0';
-                    // 设置背景图片
-                    document.body.style.backgroundImage = `linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.6)), url(${dataUrl})`;
-                    // 触发淡入动画
-                    setTimeout(() => {
-                        document.body.style.transition = 'opacity 1s ease-in-out';
-                        document.body.style.opacity = '1';
-                    }, 50);
-                };
-                
-                if (document.readyState === 'loading') {
-                    document.addEventListener('DOMContentLoaded', applyBg);
-                } else {
-                    applyBg();
-                }
-            }
-            
-            // 检查缓存是否有效
-            if (cachedTime && (now - parseInt(cachedTime)) < CACHE_DURATION) {
-                // 尝试从 localStorage 读取缓存
-                const cachedData = localStorage.getItem(CACHE_KEY);
-                if (cachedData) {
-                    setBackground(cachedData);
-                    return;
-                }
-            }
-            
-            // 获取新图片并缓存
-            fetch('https://www.loliapi.com/acg/')
-                .then(response => response.blob())
-                .then(blob => {
-                    const reader = new FileReader();
-                    reader.onloadend = function() {
-                        const dataUrl = reader.result;
-                        // 保存到 localStorage（如果图片不太大）
-                        try {
-                            localStorage.setItem(CACHE_KEY, dataUrl);
-                            localStorage.setItem(CACHE_TIME_KEY, now.toString());
-                        } catch (e) {
-                            console.warn('图片太大，无法缓存到 localStorage');
-                        }
-                        setBackground(dataUrl);
-                    };
-                    reader.readAsDataURL(blob);
-                })
-                .catch(err => {
-                    console.error('加载背景图片失败:', err);
-                });
-        })();
-    </script>
+    <link rel="icon" href="https://ghfast.top/https://raw.githubusercontent.com/ycxom/VPetLLM/refs/heads/main/3000_VPetLLM/icon.png">
+    <link rel="stylesheet" href="/stats/static/common.css">
+    <script src="/stats/static/common.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #000;
-            background-position: center center;
-            background-size: cover;
-            background-repeat: no-repeat;
-            background-attachment: fixed;
-            min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
             padding: 20px;
         }
         
-        body.bg-loaded {
-            animation: bgFadeIn 1s ease-in-out;
-        }
-        
-        @keyframes bgFadeIn {
-            from {
-                opacity: 0;
-            }
-            to {
-                opacity: 1;
-            }
-        }
-        
         .login-container {
-            background: rgba(255, 255, 255, 0.15);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border-radius: 20px;
             padding: 40px;
             width: 100%;
             max-width: 400px;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-            animation: fadeIn 0.5s ease-out;
-        }
-        
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
         }
         
         .login-header {
@@ -156,54 +51,10 @@
             text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
         }
         
-        .form-group input {
-            width: 100%;
-            padding: 12px 15px;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            border-radius: 10px;
-            background: rgba(255, 255, 255, 0.2);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            color: white;
-            font-size: 1em;
-            transition: all 0.3s ease;
-        }
-        
-        .form-group input::placeholder {
-            color: rgba(255, 255, 255, 0.6);
-        }
-        
-        .form-group input:focus {
-            outline: none;
-            border-color: rgba(255, 255, 255, 0.5);
-            background: rgba(255, 255, 255, 0.25);
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.3);
-        }
+
         
         .login-btn {
             width: 100%;
-            padding: 12px;
-            border: none;
-            border-radius: 10px;
-            background: rgba(102, 126, 234, 0.8);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            color: white;
-            font-size: 1em;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-        
-        .login-btn:hover {
-            background: rgba(85, 104, 211, 0.9);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-        }
-        
-        .login-btn:active {
-            transform: translateY(0);
         }
         
         .login-footer {
@@ -233,7 +84,7 @@
     </style>
 </head>
 <body>
-    <div class="login-container">
+    <div class="login-container glass-card fade-in">
         <div class="login-header">
             <h1>🔐 统计面板</h1>
             <p>请输入授权码以访问统计数据</p>
@@ -248,13 +99,14 @@
                     type="password" 
                     id="auth_code" 
                     name="auth_code" 
+                    class="input"
                     placeholder="请输入授权码" 
                     required 
                     autofocus
                 >
             </div>
             
-            <button type="submit" class="login-btn">登录</button>
+            <button type="submit" class="btn btn-primary login-btn">登录</button>
         </form>
         
         <div class="login-footer">

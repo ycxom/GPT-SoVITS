@@ -53,6 +53,24 @@ def register_stats_routes(app: FastAPI):
     
     # ==================== 页面路由 ====================
     
+    @app.get("/", response_class=HTMLResponse)
+    async def home_page():
+        """主页"""
+        index_html = os.path.join(templates_dir, "index.html")
+        if os.path.exists(index_html):
+            with open(index_html, 'r', encoding='utf-8') as f:
+                return HTMLResponse(content=f.read())
+        
+        return HTMLResponse(content="""
+            <html>
+                <body>
+                    <h1>GPT-SoVITS API</h1>
+                    <p>主页模板文件不存在</p>
+                    <a href="/stats">统计面板</a>
+                </body>
+            </html>
+        """)
+    
     @app.get("/stats/login", response_class=HTMLResponse)
     async def stats_login_page(request: Request):
         """统计面板登录页面"""
