@@ -35,17 +35,20 @@ POST:
     "top_k": 5,                   # int. top k sampling
     "top_p": 1,                   # float. top p sampling
     "temperature": 1,             # float. temperature for sampling
-    "text_split_method": "cut0",  # str. text split method, see text_segmentation_method.py for details.
+    "text_split_method": "cut5",  # str. text split method, see text_segmentation_method.py for details.
     "batch_size": 1,              # int. batch size for inference
     "batch_threshold": 0.75,      # float. threshold for batch splitting.
     "split_bucket": True,         # bool. whether to split the batch into multiple buckets.
     "speed_factor":1.0,           # float. control the speed of the synthesized audio.
-    "streaming_mode": False,      # bool. whether to return a streaming response.
+    "fragment_interval":0.3,      # float. to control the interval of the audio fragment.
     "seed": -1,                   # int. random seed for reproducibility.
     "parallel_infer": True,       # bool. whether to use parallel inference.
     "repetition_penalty": 1.35,   # float. repetition penalty for T2S model.
     "sample_steps": 32,           # int. number of sampling steps for VITS model V3.
-    "super_sampling": False       # bool. whether to use super-sampling for audio when using VITS model V3.
+    "super_sampling": False,      # bool. whether to use super-sampling for audio when using VITS model V3.
+    "streaming_mode": False,      # bool or int. return audio chunk by chunk. The available options are: 0,1,2,3 or True/False (0/False: Disabled | 1/True: Best Quality, Slowest response speed (old version streaming_mode) | 2: Medium Quality, Slow response speed | 3: Lower Quality, Faster response speed )
+    "overlap_length": 2,          # int. overlap length of semantic tokens for streaming mode.
+    "min_chunk_length": 16,       # int. The minimum chunk length of semantic tokens for streaming mode. (affects audio chunk size)
 }
 ```
 
@@ -108,7 +111,7 @@ import sys
 import traceback
 import re
 import time
-from typing import Generator
+from typing import Generator, Union
 from collections import defaultdict
 from datetime import datetime, timedelta
 import yaml
@@ -711,11 +714,13 @@ class TTS_Request(BaseModel):
     fragment_interval: float = 0.3
     seed: int = -1
     media_type: str = "wav"
-    streaming_mode: bool = False
+    streaming_mode: Union[bool, int] = False  # 支持 0/1/2/3 或 True/False
     parallel_infer: bool = True
     repetition_penalty: float = 1.35
     sample_steps: int = 32
     super_sampling: bool = False
+    overlap_length: int = 2  # 流式模式下语义token的重叠长度
+    min_chunk_length: int = 16  # 流式模式下语义token的最小块长度
     # 自动获取相关字段
     model_name: str = ""
     emotion: str = "默认"
@@ -725,9 +730,49 @@ class TTS_Request(BaseModel):
 
 
 ### modify from https://github.com/RVC-Boss/GPT-SoVITS/pull/894/files
+import threading
+
 def pack_ogg(io_buffer: BytesIO, data: np.ndarray, rate: int):
-    with sf.SoundFile(io_buffer, mode="w", samplerate=rate, channels=1, format="ogg") as audio_file:
-        audio_file.write(data)
+    # Author: AkagawaTsurunaki
+    # Issue:
+    #   Stack overflow probabilistically occurs
+    #   when the function `sf_writef_short` of `libsndfile_64bit.dll` is called
+    #   using the Python library `soundfile`
+    # Note:
+    #   This is an issue related to `libsndfile`, not this project itself.
+    #   It happens when you generate a large audio tensor (about 499804 frames in my PC)
+    #   and try to convert it to an ogg file.
+    # Related:
+    #   https://github.com/RVC-Boss/GPT-SoVITS/issues/1199
+    #   https://github.com/libsndfile/libsndfile/issues/1023
+    #   https://github.com/bastibe/python-soundfile/issues/396
+    # Suggestion:
+    #   Or split the whole audio data into smaller audio segment to avoid stack overflow?
+
+    def handle_pack_ogg():
+        with sf.SoundFile(io_buffer, mode="w", samplerate=rate, channels=1, format="ogg") as audio_file:
+            audio_file.write(data)
+
+    # See: https://docs.python.org/3/library/threading.html
+    # The stack size of this thread is at least 32768
+    # If stack overflow error still occurs, just modify the `stack_size`.
+    # stack_size = n * 4096, where n should be a positive integer.
+    # Here we chose n = 4096.
+    stack_size = 4096 * 4096
+    try:
+        threading.stack_size(stack_size)
+        pack_ogg_thread = threading.Thread(target=handle_pack_ogg)
+        pack_ogg_thread.start()
+        pack_ogg_thread.join()
+    except RuntimeError as e:
+        # If changing the thread stack size is unsupported, a RuntimeError is raised.
+        print("RuntimeError: {}".format(e))
+        print("Changing the thread stack size is unsupported.")
+    except ValueError as e:
+        # If the specified stack size is invalid, a ValueError is raised and the stack size is unmodified.
+        print("ValueError: {}".format(e))
+        print("The specified stack size is invalid.")
+
     return io_buffer
 
 
@@ -888,8 +933,8 @@ def check_params(req: dict):
     
     if media_type not in ["wav", "raw", "ogg", "aac"]:
         return JSONResponse(status_code=400, content={"message": f"media_type: {media_type} is not supported"})
-    elif media_type == "ogg" and not streaming_mode:
-        return JSONResponse(status_code=400, content={"message": "ogg format is not supported in non-streaming mode"})
+    # elif media_type == "ogg" and not streaming_mode:
+    #     return JSONResponse(status_code=400, content={"message": "ogg format is not supported in non-streaming mode"})
 
     if text_split_method not in cut_method_names:
         return JSONResponse(
@@ -1041,6 +1086,29 @@ async def tts_handle(req: dict):
     media_type = req.get("media_type", "wav")
     streaming_mode = req.get("streaming_mode", False)
     return_fragment = req.get("return_fragment", False)
+    fixed_length_chunk = False
+    
+    # 处理 streaming_mode 的多种模式 (0/1/2/3 或 True/False)
+    if streaming_mode == 0 or streaming_mode is False:
+        streaming_mode = False
+        return_fragment = False
+        fixed_length_chunk = False
+    elif streaming_mode == 1 or streaming_mode is True:
+        streaming_mode = False
+        return_fragment = True
+        fixed_length_chunk = False
+    elif streaming_mode == 2:
+        streaming_mode = True
+        return_fragment = False
+        fixed_length_chunk = False
+    elif streaming_mode == 3:
+        streaming_mode = True
+        return_fragment = False
+        fixed_length_chunk = True
+    
+    req["streaming_mode"] = streaming_mode
+    req["return_fragment"] = return_fragment
+    req["fixed_length_chunk"] = fixed_length_chunk
 
     # 如果没有提供 ref_audio_path，尝试完全自动获取所有参数
     if ref_audio_path in [None, ""] and model_name != "":
@@ -1104,8 +1172,8 @@ async def tts_handle(req: dict):
         
         return check_res
 
-    if streaming_mode or return_fragment:
-        req["return_fragment"] = True
+    # 更新 streaming_mode 状态用于后续判断
+    streaming_mode = streaming_mode or return_fragment
 
     try:
         # 4. 记录请求日志
@@ -1265,11 +1333,13 @@ async def tts_get_endpoint(
     fragment_interval: float = 0.3,
     seed: int = -1,
     media_type: str = "wav",
-    streaming_mode: bool = False,
+    streaming_mode: Union[bool, int] = False,
     parallel_infer: bool = True,
     repetition_penalty: float = 1.35,
     sample_steps: int = 32,
     super_sampling: bool = False,
+    overlap_length: int = 2,
+    min_chunk_length: int = 16,
     # 自动获取相关参数
     model_name: str = "",
     emotion: str = "默认",
@@ -1314,6 +1384,8 @@ async def tts_get_endpoint(
         "repetition_penalty": float(repetition_penalty),
         "sample_steps": int(sample_steps),
         "super_sampling": super_sampling,
+        "overlap_length": int(overlap_length),
+        "min_chunk_length": int(min_chunk_length),
         # 自动获取相关参数
         "model_name": model_name,
         "emotion": emotion,
