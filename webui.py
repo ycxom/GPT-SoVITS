@@ -86,7 +86,6 @@ from config import (
 from tools import my_utils
 from tools.my_utils import check_details, check_for_existance
 
-os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1' # 当遇到mps不支持的步骤时使用cpu
@@ -117,8 +116,8 @@ def set_default():
     gpu_info = "\n".join(gpu_infos)
     if is_gpu_ok:
         minmem = min(mem)
-        default_batch_size = minmem // 2 if version not in v3v4set else minmem // 8
-        default_batch_size_s1 = minmem // 2
+        default_batch_size = int(minmem // 2 if version not in v3v4set else minmem // 8)
+        default_batch_size_s1 = int(minmem // 2)
     else:
         default_batch_size = default_batch_size_s1 = int(psutil.virtual_memory().total / 1024 / 1024 / 1024 / 4)
     if version not in v3v4set:
@@ -1980,4 +1979,3 @@ with gr.Blocks(title="GPT-SoVITS WebUI", analytics_enabled=False, js=js, css=css
         server_port=webui_port_main,
         # quiet=True,
     )
-
