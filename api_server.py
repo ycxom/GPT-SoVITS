@@ -32,7 +32,7 @@ POST:
     "aux_ref_audio_paths": [],    # list.(optional) auxiliary reference audio paths for multi-speaker tone fusion
     "prompt_text": "",            # str.(optional) prompt text for the reference audio
     "prompt_lang": "",            # str.(required) language of the prompt text for the reference audio
-    "top_k": 5,                   # int. top k sampling
+    "top_k": 15,                  # int. top k sampling
     "top_p": 1,                   # float. top p sampling
     "temperature": 1,             # float. temperature for sampling
     "text_split_method": "cut5",  # str. text split method, see text_segmentation_method.py for details.
@@ -111,7 +111,7 @@ import sys
 import traceback
 import re
 import time
-from typing import Generator, Union
+from typing import Union
 from collections import defaultdict
 from datetime import datetime, timedelta
 import yaml
@@ -122,11 +122,7 @@ sys.path.append(now_dir)
 sys.path.append("%s/GPT_SoVITS" % (now_dir))
 
 import argparse
-import subprocess
-import wave
 import signal
-import numpy as np
-import soundfile as sf
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse, JSONResponse
 import uvicorn
@@ -142,6 +138,9 @@ from re import split
 
 # 导入统计和安全模块
 from api_stats import get_stats_manager, register_stats_routes
+
+# 导入 api_v2 的核心功能
+import api_v2
 
 # print(sys.path)
 i18n = I18nAuto()
@@ -229,8 +228,8 @@ def auto_get_ref_audio_and_prompt_text(model_name: str = "", prompt_lang: str = 
     else:
         emo, prompt_text = get_ref_audio(model_name, prompt_lang, emotion, version)
         if emo != "":
-            # 支持多个版本的查找
-            version_paths = [f"models/{version}", "models/v4", "models/v3", "models/v2"]
+            # 支持多个版本的查找（按优先级顺序）
+            version_paths = [f"models/{version}", "models/v2ProPlus", "models/v2Pro", "models/v4", "models/v3", "models/v2"]
             ref_audio = ""
             for version_path in version_paths:
                 if Path(f"{version_path}/{model_name}").exists():
@@ -238,6 +237,8 @@ def auto_get_ref_audio_and_prompt_text(model_name: str = "", prompt_lang: str = 
                     potential_path = f"{version_path}/{model_name}/reference_audios/{actual_lang}/emotions/【{emo}】{prompt_text}.wav"
                     if Path(potential_path).exists():
                         ref_audio = potential_path
+                        if should_log('api_details'):
+                            print(f"📁 找到参考音频 - 路径: {ref_audio}")
                         break
         else:
             ref_audio = ""
@@ -278,17 +279,211 @@ def extract_language_from_model_name(model_name: str) -> str:
     
     return ""
 
+
+def safe_header_value(value: str) -> str:
+    """
+    将字符串转换为HTTP头安全的ASCII值
+    移除或替换非ASCII字符
+    """
+    if not value:
+        return ""
+    
+    # 尝试编码为ASCII，忽略无法编码的字符
+    try:
+        return value.encode('ascii', 'ignore').decode('ascii')
+    except:
+        # 如果还是失败，使用更保守的方法
+        safe_chars = []
+        for char in value:
+            if ord(char) < 128 and char.isprintable():
+                safe_chars.append(char)
+            else:
+                safe_chars.append('_')  # 替换为下划线
+        return ''.join(safe_chars)
+
+
+def detect_text_language(text: str) -> str:
+    """基于字符占比检测文本语言"""
+    if not text:
+        return ""
+    
+    # 移除空格和标点符号，只统计有效字符
+    effective_text = re.sub(r'[\s\.,;:!?。，；：！？…\-\(\)（）\[\]【】""''`~@#$%^&*+=<>/\\|_]', '', text)
+    total_chars = len(effective_text)
+    
+    if total_chars == 0:
+        return ""
+    
+    # 统计不同语言字符的数量
+    chinese_count = len(re.findall(r'[\u4e00-\u9fff]', effective_text))
+    japanese_hiragana_count = len(re.findall(r'[\u3040-\u309f]', effective_text))  # 平假名
+    japanese_katakana_count = len(re.findall(r'[\u30a0-\u30ff]', effective_text))  # 片假名
+    korean_count = len(re.findall(r'[\uac00-\ud7af]', effective_text))
+    english_count = len(re.findall(r'[a-zA-Z]', effective_text))
+    
+    # 日语特征：平假名或片假名
+    japanese_kana_count = japanese_hiragana_count + japanese_katakana_count
+    
+    # 计算各语言字符占比
+    chinese_ratio = chinese_count / total_chars
+    japanese_ratio = japanese_kana_count / total_chars
+    korean_ratio = korean_count / total_chars
+    english_ratio = english_count / total_chars
+    
+    # 语言判断阈值
+    DOMINANT_THRESHOLD = 0.3  # 主导语言阈值（30%以上）
+    MINOR_THRESHOLD = 0.1     # 次要语言阈值（10%以上）
+    
+    # 构建语言占比字典
+    language_ratios = {
+        'zh': chinese_ratio,
+        'ja': japanese_ratio,
+        'ko': korean_ratio,
+        'en': english_ratio
+    }
+    
+    # 找出占比最高的语言
+    max_lang = max(language_ratios, key=language_ratios.get)
+    max_ratio = language_ratios[max_lang]
+    
+    # 调试信息（可选）
+    if should_log('api_details'):
+        ratios_str = ", ".join([f"{lang}: {ratio:.1%}" for lang, ratio in language_ratios.items() if ratio > 0])
+        print(f"🔍 语言占比分析 - 文本: '{text[:20]}{'...' if len(text) > 20 else ''}' ({total_chars}字符), 占比: {ratios_str}")
+        
+        # 显示检测规则应用情况
+        if japanese_ratio >= MINOR_THRESHOLD:
+            print(f"📋 应用规则1: 日语假名占比 {japanese_ratio:.1%} >= {MINOR_THRESHOLD:.1%}，判断为日语")
+        elif chinese_ratio >= MINOR_THRESHOLD and japanese_ratio == 0:
+            print(f"📋 应用规则2: 中文占比 {chinese_ratio:.1%} >= {MINOR_THRESHOLD:.1%} 且无日语假名，判断为中文")
+        elif korean_ratio >= MINOR_THRESHOLD:
+            print(f"📋 应用规则3: 韩语占比 {korean_ratio:.1%} >= {MINOR_THRESHOLD:.1%}，判断为韩语")
+        elif english_ratio >= DOMINANT_THRESHOLD:
+            print(f"📋 应用规则4: 英语占比 {english_ratio:.1%} >= {DOMINANT_THRESHOLD:.1%}，判断为英语")
+        elif max_ratio >= DOMINANT_THRESHOLD:
+            print(f"📋 应用规则5: 最高占比语言 {max_lang} ({max_ratio:.1%}) >= {DOMINANT_THRESHOLD:.1%}")
+        elif (chinese_ratio + japanese_ratio) >= DOMINANT_THRESHOLD and japanese_ratio == 0:
+            print(f"📋 应用规则6: 中日文总占比 {(chinese_ratio + japanese_ratio):.1%} >= {DOMINANT_THRESHOLD:.1%} 且无假名，判断为中文")
+        elif max_ratio > 0:
+            print(f"📋 应用规则7: 使用最高占比语言 {max_lang} ({max_ratio:.1%})")
+        else:
+            print(f"📋 无法确定语言: 所有语言占比都为0")
+    
+    # 特殊规则优先判断
+    
+    # 1. 如果有日语假名且占比超过阈值，优先判断为日语
+    if japanese_ratio >= MINOR_THRESHOLD:
+        return 'ja'
+    
+    # 2. 如果有中文字符但没有日语假名，且中文占比足够，判断为中文
+    if chinese_ratio >= MINOR_THRESHOLD and japanese_ratio == 0:
+        return 'zh'
+    
+    # 3. 如果韩语字符占比超过阈值，判断为韩语
+    if korean_ratio >= MINOR_THRESHOLD:
+        return 'ko'
+    
+    # 4. 如果英语字符占比超过主导阈值，判断为英语
+    if english_ratio >= DOMINANT_THRESHOLD:
+        return 'en'
+    
+    # 5. 如果最高占比语言超过主导阈值，使用该语言
+    if max_ratio >= DOMINANT_THRESHOLD:
+        return max_lang
+    
+    # 6. 混合语言情况：如果中文+日语占比很高，但没有假名，判断为中文
+    if (chinese_ratio + japanese_ratio) >= DOMINANT_THRESHOLD and japanese_ratio == 0:
+        return 'zh'
+    
+    # 7. 如果所有语言占比都很低，返回占比最高的（如果有的话）
+    if max_ratio > 0:
+        return max_lang
+    
+    return ""
+
+
+def validate_language_match(text: str, model_name: str) -> tuple[bool, str]:
+    """
+    验证文本语言与模型语言是否匹配
+    
+    Returns:
+        (is_valid, warning_message)
+    """
+    if not model_name or not text:
+        return True, ""
+    
+    model_lang = extract_language_from_model_name(model_name)
+    if not model_lang:
+        return True, ""  # 无法确定模型语言，跳过验证
+    
+    text_lang = detect_text_language(text)
+    if not text_lang:
+        return True, ""  # 无法确定文本语言，跳过验证
+    
+    # 语言匹配检查
+    if model_lang != text_lang:
+        warning = f"⚠️ 语言不匹配警告: 文本语言({text_lang}) 与模型语言({model_lang}) 不一致，可能影响合成质量"
+        return False, warning
+    
+    return True, ""
+
+def get_available_model_versions(model_name: str) -> list:
+    """获取指定模型名称的所有可用版本"""
+    available_versions = []
+    
+    # 按优先级顺序检查版本（新版本优先）
+    version_priority = ["v2ProPlus", "v2Pro", "v4", "v3", "v2"]
+    
+    for version in version_priority:
+        model_path = Path(f"models/{version}/{model_name}")
+        if model_path.exists() and model_path.is_dir():
+            # 检查是否有实际的模型文件（不只是.keep文件）
+            files = list(model_path.rglob("*"))
+            non_keep_files = [f for f in files if f.name != ".keep"]
+            if non_keep_files:
+                available_versions.append(version)
+    
+    return available_versions
+
+
+def auto_select_best_version(model_name: str, preferred_version: str = "v4") -> str:
+    """自动选择最佳的模型版本"""
+    available_versions = get_available_model_versions(model_name)
+    
+    if not available_versions:
+        if should_log('api_details'):
+            print(f"⚠️ 模型 '{model_name}' 在任何版本中都不存在")
+        return preferred_version  # 返回默认版本
+    
+    # 如果首选版本可用，使用首选版本
+    if preferred_version in available_versions:
+        if should_log('api_details'):
+            print(f"✅ 使用首选版本 - 模型: {model_name}, 版本: {preferred_version}")
+        return preferred_version
+    
+    # 否则使用最高优先级的可用版本
+    best_version = available_versions[0]  # available_versions已按优先级排序
+    if should_log('api_details'):
+        print(f"🔄 版本自动选择 - 模型: {model_name}, 首选: {preferred_version} -> 实际: {best_version}")
+    
+    return best_version
+
+
+def auto_get_all_parameters(model_name: str = "", emotion: str = "默认", version: str = "v4"):
 def auto_get_all_parameters(model_name: str = "", emotion: str = "默认", version: str = "v4"):
     """自动获取所有缺失的参数：prompt_lang, ref_audio_path, prompt_text"""
     if model_name == "":
         return "", "", ""
+    
+    # 自动选择最佳版本
+    best_version = auto_select_best_version(model_name, version)
     
     # 首先尝试从模型名称自动获取语言
     auto_prompt_lang = extract_language_from_model_name(model_name)
     
     if not auto_prompt_lang:
         # 如果从模型名称提取失败，尝试查找第一个可用的语言
-        version_paths = [f"models/{version}", "models/v4", "models/v3", "models/v2"]
+        version_paths = [f"models/{best_version}", "models/v4", "models/v3", "models/v2ProPlus", "models/v2Pro", "models/v2"]
         for version_path in version_paths:
             model_path = Path(f"{version_path}/{model_name}")
             if model_path.exists():
@@ -313,8 +508,8 @@ def auto_get_all_parameters(model_name: str = "", emotion: str = "默认", versi
     if not auto_prompt_lang:
         auto_prompt_lang = "zh"
     
-    # 使用获取到的语言自动获取参考音频和文本
-    ref_audio, prompt_text = auto_get_ref_audio_and_prompt_text(model_name, auto_prompt_lang, emotion, version)
+    # 使用获取到的语言和最佳版本自动获取参考音频和文本
+    ref_audio, prompt_text = auto_get_ref_audio_and_prompt_text(model_name, auto_prompt_lang, emotion, best_version)
     
     return auto_prompt_lang, ref_audio, prompt_text
 #===============API配置管理和认证功能================
@@ -501,14 +696,21 @@ def should_log(log_type: str) -> bool:
     # 默认打印
     return True
 
-def get_model_for_user(api_key: str, text_lang: str, model_name: str = "") -> tuple[str, dict]:
+def get_model_for_user(api_key: str, text_lang: str, model_name: str = "", text: str = "") -> tuple[str, dict, str]:
     """
-    为用户获取合适的模型，返回(最终模型名, 重定向信息)
+    为用户获取合适的模型，返回(最终模型名, 重定向信息, 检测到的语言)
+    
+    Args:
+        api_key: 用户API密钥
+        text_lang: 文本语言（可能是"auto"）
+        model_name: 指定的模型名（可能为空）
+        text: 要合成的文本（用于自动语言检测）
     
     Returns:
-        tuple: (final_model_name, redirect_info)
+        tuple: (final_model_name, redirect_info, detected_lang)
             - final_model_name: 最终使用的模型名
             - redirect_info: 重定向信息字典，包含是否被重定向和原因
+            - detected_lang: 检测到的语言（如果进行了自动检测）
     """
     redirect_info = {
         "redirected": False,
@@ -517,11 +719,31 @@ def get_model_for_user(api_key: str, text_lang: str, model_name: str = "") -> tu
         "reason": ""
     }
     
+    detected_lang = text_lang  # 默认使用原始语言
+    
+    # 如果 text_lang 是 "auto"，先检测文本语言
+    if text_lang == "auto" and text:
+        if should_log('api_details'):
+            print(f"🔍 启动自动语言检测 - 文本: '{text[:30]}{'...' if len(text) > 30 else ''}'")
+        
+        detected_lang = detect_text_language(text)
+        if detected_lang:
+            text_lang = detected_lang
+            if should_log('api_details'):
+                print(f"✅ 自动语言检测完成 - 检测结果: {detected_lang}")
+        else:
+            if should_log('api_details'):
+                print(f"⚠️ 自动语言检测失败 - 无法确定语言，使用默认语言: zh")
+            text_lang = "zh"  # 默认使用中文
+            detected_lang = "zh"
+    
     # 如果没有指定模型，使用默认模型
     if not model_name:
         final_model = get_default_model(text_lang)
         redirect_info["final_model"] = final_model
-        return final_model, redirect_info
+        if should_log('api_details'):
+            print(f"📋 使用默认模型 - 语言: {text_lang}, 模型: {final_model}")
+        return final_model, redirect_info, detected_lang
     
     # 检查用户权限
     if API_CONFIG.get('permissions', {}).get('strict_model_access', False):
@@ -538,11 +760,11 @@ def get_model_for_user(api_key: str, text_lang: str, model_name: str = "") -> tu
             if API_CONFIG.get('security', {}).get('log_requests', True) and should_log('api_details'):
                 print(f"⚠️ 模型重定向 - Key: {api_key[:8]}..., 请求模型: {model_name}, 重定向到: {final_model}")
             
-            return final_model, redirect_info
+            return final_model, redirect_info, detected_lang
     
     # 用户有权限访问指定模型
     redirect_info["final_model"] = model_name
-    return model_name, redirect_info
+    return model_name, redirect_info, detected_lang
 
 parser = argparse.ArgumentParser(description="GPT-SoVITS api")
 parser.add_argument("-c", "--tts_config", type=str, default="GPT_SoVITS/configs/tts_infer.yaml", help="tts_infer路径")
@@ -561,6 +783,17 @@ if config_path in [None, ""]:
 # 加载API配置文件
 load_api_config()
 
+# 导入 api_v2 模块（这会初始化 TTS）
+print("=" * 80)
+print("🚀 正在启动 GPT-SoVITS API Server")
+print("=" * 80)
+print(f"📁 配置文件: {config_path}")
+print(f"🌐 绑定地址: {host}:{port}")
+print(f"📊 统计功能: {'启用' if API_CONFIG.get('statistics', {}).get('enable_stats', True) else '禁用'}")
+print(f"🔐 认证功能: {'启用' if API_CONFIG.get('permissions', {}).get('require_api_key', False) else '禁用'}")
+print("=" * 80)
+print()
+
 # 记录服务启动事件
 try:
     from api_stats import get_stats_manager
@@ -574,34 +807,19 @@ try:
 except Exception as e:
     print(f"⚠️ 无法记录启动事件: {e}")
 
-# 记录TTS配置加载
-import time as time_module
-load_start = time_module.time()
-tts_config = TTS_Config(config_path)
-print(tts_config)
+# 使用 api_v2 的 TTS 配置和 Pipeline，避免重复初始化
+print("📦 复用 api_v2 的 TTS 实例...")
+tts_config = api_v2.tts_config
+tts_pipeline = api_v2.tts_pipeline
+print("✅ TTS 实例加载完成")
+print()
 
 try:
     stats_manager_init.log_system_event(
         event_type="model_load",
         event_name="TTS配置加载",
         details=f"版本: {tts_config.version}",
-        status="success",
-        duration=time_module.time() - load_start
-    )
-except:
-    pass
-
-# 记录TTS Pipeline初始化
-pipeline_start = time_module.time()
-tts_pipeline = TTS(tts_config)
-
-try:
-    stats_manager_init.log_system_event(
-        event_type="model_load",
-        event_name="TTS Pipeline初始化",
-        details="GPT-SoVITS模型加载完成",
-        status="success",
-        duration=time_module.time() - pipeline_start
+        status="success"
     )
 except:
     pass
@@ -703,7 +921,7 @@ class TTS_Request(BaseModel):
     aux_ref_audio_paths: list = None
     prompt_lang: str = None
     prompt_text: str = ""
-    top_k: int = 5
+    top_k: int = 15
     top_p: float = 1
     temperature: float = 1
     text_split_method: str = "cut5"
@@ -729,121 +947,7 @@ class TTS_Request(BaseModel):
     api_key: str = ""
 
 
-### modify from https://github.com/RVC-Boss/GPT-SoVITS/pull/894/files
-import threading
-
-def pack_ogg(io_buffer: BytesIO, data: np.ndarray, rate: int):
-    # Author: AkagawaTsurunaki
-    # Issue:
-    #   Stack overflow probabilistically occurs
-    #   when the function `sf_writef_short` of `libsndfile_64bit.dll` is called
-    #   using the Python library `soundfile`
-    # Note:
-    #   This is an issue related to `libsndfile`, not this project itself.
-    #   It happens when you generate a large audio tensor (about 499804 frames in my PC)
-    #   and try to convert it to an ogg file.
-    # Related:
-    #   https://github.com/RVC-Boss/GPT-SoVITS/issues/1199
-    #   https://github.com/libsndfile/libsndfile/issues/1023
-    #   https://github.com/bastibe/python-soundfile/issues/396
-    # Suggestion:
-    #   Or split the whole audio data into smaller audio segment to avoid stack overflow?
-
-    def handle_pack_ogg():
-        with sf.SoundFile(io_buffer, mode="w", samplerate=rate, channels=1, format="ogg") as audio_file:
-            audio_file.write(data)
-
-    # See: https://docs.python.org/3/library/threading.html
-    # The stack size of this thread is at least 32768
-    # If stack overflow error still occurs, just modify the `stack_size`.
-    # stack_size = n * 4096, where n should be a positive integer.
-    # Here we chose n = 4096.
-    stack_size = 4096 * 4096
-    try:
-        threading.stack_size(stack_size)
-        pack_ogg_thread = threading.Thread(target=handle_pack_ogg)
-        pack_ogg_thread.start()
-        pack_ogg_thread.join()
-    except RuntimeError as e:
-        # If changing the thread stack size is unsupported, a RuntimeError is raised.
-        print("RuntimeError: {}".format(e))
-        print("Changing the thread stack size is unsupported.")
-    except ValueError as e:
-        # If the specified stack size is invalid, a ValueError is raised and the stack size is unmodified.
-        print("ValueError: {}".format(e))
-        print("The specified stack size is invalid.")
-
-    return io_buffer
-
-
-def pack_raw(io_buffer: BytesIO, data: np.ndarray, rate: int):
-    io_buffer.write(data.tobytes())
-    return io_buffer
-
-
-def pack_wav(io_buffer: BytesIO, data: np.ndarray, rate: int):
-    io_buffer = BytesIO()
-    sf.write(io_buffer, data, rate, format="wav")
-    return io_buffer
-
-
-def pack_aac(io_buffer: BytesIO, data: np.ndarray, rate: int):
-    process = subprocess.Popen(
-        [
-            "ffmpeg",
-            "-f",
-            "s16le",  # 输入16位有符号小端整数PCM
-            "-ar",
-            str(rate),  # 设置采样率
-            "-ac",
-            "1",  # 单声道
-            "-i",
-            "pipe:0",  # 从管道读取输入
-            "-c:a",
-            "aac",  # 音频编码器为AAC
-            "-b:a",
-            "192k",  # 比特率
-            "-vn",  # 不包含视频
-            "-f",
-            "adts",  # 输出AAC数据流格式
-            "pipe:1",  # 将输出写入管道
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    out, _ = process.communicate(input=data.tobytes())
-    io_buffer.write(out)
-    return io_buffer
-
-
-def pack_audio(io_buffer: BytesIO, data: np.ndarray, rate: int, media_type: str):
-    if media_type == "ogg":
-        io_buffer = pack_ogg(io_buffer, data, rate)
-    elif media_type == "aac":
-        io_buffer = pack_aac(io_buffer, data, rate)
-    elif media_type == "wav":
-        io_buffer = pack_wav(io_buffer, data, rate)
-    else:
-        io_buffer = pack_raw(io_buffer, data, rate)
-    io_buffer.seek(0)
-    return io_buffer
-
-
-# from https://huggingface.co/spaces/coqui/voice-chat-with-mistral/blob/main/app.py
-def wave_header_chunk(frame_input=b"", channels=1, sample_width=2, sample_rate=32000):
-    # This will create a wave header then append the frame input
-    # It should be first on a streaming wav file
-    # Other frames better should not have it (else you will hear some artifacts each chunk start)
-    wav_buf = BytesIO()
-    with wave.open(wav_buf, "wb") as vfout:
-        vfout.setnchannels(channels)
-        vfout.setsampwidth(sample_width)
-        vfout.setframerate(sample_rate)
-        vfout.writeframes(frame_input)
-
-    wav_buf.seek(0)
-    return wav_buf.read()
+# 音频处理函数使用 api_v2 模块的实现
 
 
 def get_real_ip(request: Request) -> str:
@@ -854,14 +958,6 @@ def get_real_ip(request: Request) -> str:
     if "x-real-ip" in request.headers:
         return request.headers["x-real-ip"]
     return request.client.host
-
-
-def handle_control(command: str):
-    if command == "restart":
-        os.execl(sys.executable, sys.executable, *argv)
-    elif command == "exit":
-        os.kill(os.getpid(), signal.SIGTERM)
-        exit(0)
 
 
 def extract_prompt_text_from_filename(ref_audio_path: str) -> str:
@@ -879,19 +975,17 @@ def extract_prompt_text_from_filename(ref_audio_path: str) -> str:
     except Exception:
         return ""
 
-def check_params(req: dict):
+# 参数验证函数 - 扩展版（支持企业级功能）
+def check_params_extended(req: dict):
+    """
+    扩展的参数验证，支持 api_server 的企业级功能
+    在调用 api_v2.check_params 前进行预处理
+    """
     text: str = req.get("text", "")
     text_lang: str = req.get("text_lang", "")
     ref_audio_path: str = req.get("ref_audio_path", "")
-    streaming_mode: bool = req.get("streaming_mode", False)
-    media_type: str = req.get("media_type", "wav")
-    prompt_lang: str = req.get("prompt_lang", "")
-    text_split_method: str = req.get("text_split_method", "cut5")
     model_name: str = req.get("model_name", "")
-    emotion: str = req.get("emotion", "默认")
-    version: str = req.get("version", "v4")
-
-    
+    prompt_lang: str = req.get("prompt_lang", "")
 
     if text in [None, ""]:
         return JSONResponse(status_code=400, content={"message": "text is required"})
@@ -899,48 +993,31 @@ def check_params(req: dict):
     # 如果没有提供 text_lang，自动使用智能语言识别模式
     if text_lang in [None, ""]:
         text_lang = "auto"
-        req["text_lang"] = "auto"  # 更新请求参数
+        req["text_lang"] = "auto"
     
-    if text_lang.lower() not in tts_config.languages:
+    # 验证 text_lang（"auto" 是特殊值，无需验证）
+    if text_lang.lower() != "auto" and text_lang.lower() not in tts_config.languages:
         return JSONResponse(
             status_code=400,
-            content={"message": f"text_lang: {text_lang} is not supported in version {tts_config.version}"},
+            content={"message": f"text_lang: {text_lang} is not supported in version {tts_config.version}. Use 'auto' for automatic detection or one of: {', '.join(tts_config.languages)}"},
         )
     
-    # 如果提供了 model_name，允许在没有 ref_audio_path 的情况下继续（稍后会自动获取）
-    # 只有在既没有 model_name 也没有 ref_audio_path 的情况下才报错
+    # 如果提供了 model_name，允许在没有 ref_audio_path 的情况下继续
     if ref_audio_path in [None, ""] and model_name == "":
         return JSONResponse(status_code=400, content={"message": "Either ref_audio_path or model_name is required"})
     
-    # prompt_lang 的验证逻辑：
-    # 1. 如果提供了 model_name，可以在后续自动获取
-    # 2. 如果提供了 ref_audio_path，也可以从文件名提取 prompt_text（暂不验证 prompt_lang）
-    # 3. 只有在既没有 model_name 也没有 ref_audio_path 时才需要 prompt_lang
+    # prompt_lang 验证 - 修复 NoneType 错误
     if model_name != "" and prompt_lang == "":
-        # 这里不报错，在 tts_handle 中会自动获取
-        pass
+        pass  # 会在后续自动获取
     elif ref_audio_path not in [None, ""] and prompt_lang == "":
-        # 提供了 ref_audio_path，prompt_lang 可以从文件名提取（暂不验证）
-        pass
-    elif prompt_lang != "" and prompt_lang.lower() not in tts_config.languages:
+        pass  # 可以从文件名提取
+    elif prompt_lang and prompt_lang != "" and prompt_lang.lower() not in tts_config.languages:
         return JSONResponse(
             status_code=400,
             content={"message": f"prompt_lang: {prompt_lang} is not supported in version {tts_config.version}"},
         )
     elif model_name == "" and ref_audio_path in [None, ""] and prompt_lang == "":
-        # 既没有 model_name 也没有 ref_audio_path 且没有 prompt_lang，这是错误的情况
         return JSONResponse(status_code=400, content={"message": "prompt_lang is required when neither ref_audio_path nor model_name is provided"})
-    
-    if media_type not in ["wav", "raw", "ogg", "aac"]:
-        return JSONResponse(status_code=400, content={"message": f"media_type: {media_type} is not supported"})
-    # elif media_type == "ogg" and not streaming_mode:
-    #     return JSONResponse(status_code=400, content={"message": "ogg format is not supported in non-streaming mode"})
-
-    if text_split_method not in cut_method_names:
-        return JSONResponse(
-            status_code=400, content={"message": f"text_split_method:{text_split_method} is not supported"}
-        )
-
     
     return None
 
@@ -958,7 +1035,7 @@ async def tts_handle(req: dict):
                 "aux_ref_audio_paths": [],    # list.(optional) auxiliary reference audio paths for multi-speaker synthesis
                 "prompt_text": "",            # str.(optional) prompt text for the reference audio (auto extracted from ref_audio_path filename)
                 "prompt_lang": "",            # str.(required) language of the prompt text for the reference audio
-                "top_k": 5,                   # int. top k sampling
+                "top_k": 15,                  # int. top k sampling
                 "top_p": 1,                   # float. top p sampling
                 "temperature": 1,             # float. temperature for sampling
                 "text_split_method": "cut5",  # str. text split method, see text_segmentation_method.py for details.
@@ -1068,9 +1145,55 @@ async def tts_handle(req: dict):
     # 3. 模型权限检查和获取
     model_name = req.get("model_name", "")
     text_lang = req.get("text_lang", "")
+    text = req.get("text", "")
     
     # 获取用户可访问的模型
-    final_model_name, redirect_info = get_model_for_user(user_info['key'], text_lang, model_name)
+    final_model_name, redirect_info, detected_lang = get_model_for_user(user_info['key'], text_lang, model_name, text)
+    
+    # 如果语言检测发生了变化，更新请求中的 text_lang
+    if detected_lang != req.get("text_lang", ""):
+        req["text_lang"] = detected_lang
+        text_lang = detected_lang
+        if should_log('api_details'):
+            print(f"📝 更新请求语言 - 原始: {req.get('text_lang', '')}, 检测后: {detected_lang}")
+    
+    # 4. 验证文本语言与模型语言是否匹配，并自动修正
+    is_match, warning_msg = validate_language_match(text, final_model_name)
+    if not is_match:
+        if should_log('api_details'):
+            print(warning_msg)
+        
+        # 检测文本语言并尝试重定向到合适的模型
+        detected_lang = detect_text_language(text)
+        if detected_lang and detected_lang != text_lang:
+            # 更新 text_lang 为检测到的语言
+            text_lang = detected_lang
+            req["text_lang"] = detected_lang
+            
+            # 尝试获取该语言的默认模型
+            suggested_model = get_default_model(detected_lang)
+            
+            # 检查用户是否有权限访问建议的模型
+            if check_model_access(user_info.get('models', ['*']), suggested_model):
+                if should_log('api_details'):
+                    print(f"🔄 自动语言修正 - 检测到文本语言: {detected_lang}, 重定向模型: {final_model_name} -> {suggested_model}")
+                
+                final_model_name = suggested_model
+                req["model_name"] = suggested_model
+                
+                # 更新重定向信息
+                redirect_info.update({
+                    "redirected": True,
+                    "original_model": model_name,
+                    "final_model": suggested_model,
+                    "reason": f"检测到文本语言({detected_lang})与原模型语言不匹配，已自动重定向到合适的{detected_lang}模型"
+                })
+            else:
+                if should_log('api_details'):
+                    print(f"⚠️ 无法自动修正 - 用户无权限访问建议的{detected_lang}模型: {suggested_model}")
+        else:
+            if should_log('api_details'):
+                print("⚠️ 无法自动修正语言不匹配 - 继续使用原模型，可能影响合成质量")
     
     # 如果模型发生了变更，记录到req中
     if final_model_name != model_name:
@@ -1126,7 +1249,8 @@ async def tts_handle(req: dict):
         if extracted_prompt_text != "":
             req["prompt_text"] = extracted_prompt_text
     
-    check_res = check_params(req)
+    # 使用扩展的参数验证
+    check_res = check_params_extended(req)
     if check_res is not None:
         text = req.get("text", "")
         text_preview = text[:100] if len(text) > 100 else text
@@ -1155,11 +1279,11 @@ async def tts_handle(req: dict):
             status_code = check_res.status_code
             response_body = check_res.body.decode('utf-8') if isinstance(check_res.body, bytes) else str(check_res.body)
             
-            # 创建带有重定向头的新Response对象（使用ASCII字符）
+            # 创建带有重定向头的新Response对象（使用ASCII安全编码）
             headers = {
                 "X-Model-Redirected": "true",
                 "X-Original-Model": "unauthorized_model",
-                "X-Final-Model": redirect_info["final_model"],
+                "X-Final-Model": safe_header_value(redirect_info["final_model"]),
                 "X-Redirect-Reason": "model_not_authorized"
             }
             
@@ -1181,51 +1305,27 @@ async def tts_handle(req: dict):
             client_ip = req.get("client_ip", "unknown")
             print(f"📊 API调用 - IP: {client_ip}, Key: {user_info['key'][:8]}..., Model: {model_name}, Text: {req.get('text', '')[:20]}...")
         
-        # 5. 执行TTS推理
+        # 5. 执行TTS推理 - 调用 api_v2 的核心处理逻辑
         tts_start_time = time.time()
         if should_log('tts_synthesis'):
             print(f"🎤 开始TTS合成 - Model: {model_name}, Text长度: {len(req.get('text', ''))}字符")
-        tts_generator = tts_pipeline.run(req)
-
-        if streaming_mode:
-
-            def streaming_generator(tts_generator: Generator, media_type: str):
-                if_frist_chunk = True
-                for sr, chunk in tts_generator:
-                    if if_frist_chunk and media_type == "wav":
-                        yield wave_header_chunk(sample_rate=sr)
-                        media_type = "raw"
-                        if_frist_chunk = False
-                    yield pack_audio(BytesIO(), chunk, sr, media_type).getvalue()
-
-            # 添加重定向信息到响应头（使用ASCII字符）
-            headers = {}
-            if redirect_info["redirected"]:
-                headers["X-Model-Redirected"] = "true"
-                headers["X-Original-Model"] = redirect_info["original_model"]
-                headers["X-Final-Model"] = redirect_info["final_model"]
-                headers["X-Redirect-Reason"] = "model_not_authorized"
-                
-            response = StreamingResponse(
-                streaming_generator(
-                    tts_generator,
-                    media_type,
-                ),
-                media_type=f"audio/{media_type}",
-                headers=headers
-            )
-        else:
-            # 添加重定向信息到响应头
-            headers = {}
-            if redirect_info["redirected"]:
-                headers["X-Model-Redirected"] = "true"
-                headers["X-Original-Model"] = redirect_info["original_model"]
-                headers["X-Final-Model"] = redirect_info["final_model"]
-                headers["X-Redirect-Reason"] = "model_not_authorized"
-                
-            sr, audio_data = next(tts_generator)
-            audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
-            response = Response(audio_data, media_type=f"audio/{media_type}", headers=headers)
+        
+        # 调用 api_v2.tts_handle 进行实际的 TTS 处理
+        response = await api_v2.tts_handle(req)
+        
+        # 添加企业级功能的响应头
+        if redirect_info["redirected"]:
+            # 为响应添加重定向信息头（使用ASCII安全的编码）
+            if isinstance(response, StreamingResponse):
+                response.headers["X-Model-Redirected"] = "true"
+                response.headers["X-Original-Model"] = safe_header_value(redirect_info["original_model"])
+                response.headers["X-Final-Model"] = safe_header_value(redirect_info["final_model"])
+                response.headers["X-Redirect-Reason"] = "language_mismatch_auto_corrected"
+            elif isinstance(response, Response):
+                response.headers["X-Model-Redirected"] = "true"
+                response.headers["X-Original-Model"] = safe_header_value(redirect_info["original_model"])
+                response.headers["X-Final-Model"] = safe_header_value(redirect_info["final_model"])
+                response.headers["X-Redirect-Reason"] = "language_mismatch_auto_corrected"
         
         # 6. 记录成功的请求统计（在完成所有处理后记录）
         tts_time = time.time() - tts_start_time
@@ -1294,7 +1394,7 @@ async def tts_handle(req: dict):
             headers = {
                 "X-Model-Redirected": "true",
                 "X-Original-Model": "unauthorized_model",
-                "X-Final-Model": redirect_info["final_model"],
+                "X-Final-Model": safe_header_value(redirect_info["final_model"]),
                 "X-Redirect-Reason": "model_not_authorized"
             }
             return JSONResponse(
@@ -1308,9 +1408,8 @@ async def tts_handle(req: dict):
 
 @APP.get("/control")
 async def control(command: str = None):
-    if command is None:
-        return JSONResponse(status_code=400, content={"message": "command is required"})
-    handle_control(command)
+    """代理到 api_v2.control"""
+    return await api_v2.control(command)
 
 
 @APP.get("/tts")
@@ -1322,7 +1421,7 @@ async def tts_get_endpoint(
     aux_ref_audio_paths: list = None,
     prompt_lang: str = None,
     prompt_text: str = "",
-    top_k: int = 5,
+    top_k: int = 15,
     top_p: float = 1,
     temperature: float = 1,
     text_split_method: str = "cut0",
@@ -1416,46 +1515,24 @@ async def tts_post_endpoint(body: TTS_Request, request: Request):
     return await tts_handle(req)
 
 
+# 以下端点直接代理到 api_v2 的实现，并添加统计功能
+
 @APP.get("/set_refer_audio")
-async def set_refer_aduio(refer_audio_path: str = None):
-    try:
-        tts_pipeline.set_ref_audio(refer_audio_path)
-    except Exception as e:
-        return JSONResponse(status_code=400, content={"message": "set refer audio failed", "Exception": str(e)})
-    return JSONResponse(status_code=200, content={"message": "success"})
-
-
-# @APP.post("/set_refer_audio")
-# async def set_refer_aduio_post(audio_file: UploadFile = File(...)):
-#     try:
-#         # 检查文件类型，确保是音频文件
-#         if not audio_file.content_type.startswith("audio/"):
-#             return JSONResponse(status_code=400, content={"message": "file type is not supported"})
-
-#         os.makedirs("uploaded_audio", exist_ok=True)
-#         save_path = os.path.join("uploaded_audio", audio_file.filename)
-#         # 保存音频文件到服务器上的一个目录
-#         with open(save_path , "wb") as buffer:
-#             buffer.write(await audio_file.read())
-
-#         tts_pipeline.set_ref_audio(save_path)
-#     except Exception as e:
-#         return JSONResponse(status_code=400, content={"message": f"set refer audio failed", "Exception": str(e)})
-#     return JSONResponse(status_code=200, content={"message": "success"})
+async def set_refer_audio(refer_audio_path: str = None):
+    """代理到 api_v2.set_refer_aduio"""
+    return await api_v2.set_refer_aduio(refer_audio_path)
 
 
 @APP.get("/set_gpt_weights")
 async def set_gpt_weights(weights_path: str = None):
+    """代理到 api_v2.set_gpt_weights 并添加统计"""
     load_start = time.time()
+    result = await api_v2.set_gpt_weights(weights_path)
+    
+    # 记录模型切换事件
     try:
-        if weights_path in ["", None]:
-            return JSONResponse(status_code=400, content={"message": "gpt weight path is required"})
-        
-        tts_pipeline.init_t2s_weights(weights_path)
-        
-        # 记录GPT模型加载成功
-        try:
-            stats_manager = get_stats_manager()
+        stats_manager = get_stats_manager()
+        if result.status_code == 200:
             stats_manager.log_system_event(
                 event_type="model_switch",
                 event_name="GPT模型切换",
@@ -1463,39 +1540,30 @@ async def set_gpt_weights(weights_path: str = None):
                 status="success",
                 duration=time.time() - load_start
             )
-        except:
-            pass
-            
-    except Exception as e:
-        # 记录GPT模型加载失败
-        try:
-            stats_manager = get_stats_manager()
+        else:
             stats_manager.log_system_event(
                 event_type="model_switch",
                 event_name="GPT模型切换失败",
-                details=f"模型路径: {weights_path}, 错误: {str(e)}",
+                details=f"模型路径: {weights_path}",
                 status="failed",
                 duration=time.time() - load_start
             )
-        except:
-            pass
-        return JSONResponse(status_code=400, content={"message": "change gpt weight failed", "Exception": str(e)})
-
-    return JSONResponse(status_code=200, content={"message": "success"})
+    except:
+        pass
+    
+    return result
 
 
 @APP.get("/set_sovits_weights")
 async def set_sovits_weights(weights_path: str = None):
+    """代理到 api_v2.set_sovits_weights 并添加统计"""
     load_start = time.time()
+    result = await api_v2.set_sovits_weights(weights_path)
+    
+    # 记录模型切换事件
     try:
-        if weights_path in ["", None]:
-            return JSONResponse(status_code=400, content={"message": "sovits weight path is required"})
-        
-        tts_pipeline.init_vits_weights(weights_path)
-        
-        # 记录SoVITS模型加载成功
-        try:
-            stats_manager = get_stats_manager()
+        stats_manager = get_stats_manager()
+        if result.status_code == 200:
             stats_manager.log_system_event(
                 event_type="model_switch",
                 event_name="SoVITS模型切换",
@@ -1503,25 +1571,18 @@ async def set_sovits_weights(weights_path: str = None):
                 status="success",
                 duration=time.time() - load_start
             )
-        except:
-            pass
-            
-    except Exception as e:
-        # 记录SoVITS模型加载失败
-        try:
-            stats_manager = get_stats_manager()
+        else:
             stats_manager.log_system_event(
                 event_type="model_switch",
                 event_name="SoVITS模型切换失败",
-                details=f"模型路径: {weights_path}, 错误: {str(e)}",
+                details=f"模型路径: {weights_path}",
                 status="failed",
                 duration=time.time() - load_start
             )
-        except:
-            pass
-        return JSONResponse(status_code=400, content={"message": "change sovits weight failed", "Exception": str(e)})
+    except:
+        pass
     
-    return JSONResponse(status_code=200, content={"message": "success"})
+    return result
 
 
 if __name__ == "__main__":
@@ -1536,6 +1597,16 @@ if __name__ == "__main__":
             log_level = "warning"
         else:
             log_level = "info"
+        
+        print("=" * 80)
+        print("✅ API Server 启动成功！")
+        print("=" * 80)
+        print(f"📍 访问地址: http://{host if host else '0.0.0.0'}:{port}")
+        print(f"📊 统计面板: http://{host if host else '0.0.0.0'}:{port}/stats")
+        print(f"🔒 安全日志: http://{host if host else '0.0.0.0'}:{port}/security")
+        print(f"📖 API文档: http://{host if host else '0.0.0.0'}:{port}/docs")
+        print("=" * 80)
+        print()
         
         uvicorn.run(
             app=APP, 

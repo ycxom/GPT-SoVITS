@@ -1,0 +1,179 @@
+# API企业级配置文件
+# 用于API Key认证、默认模型配置和权限控制
+
+# API Key配置
+api_keys:
+  # 示例API Key配置
+  sk_YOUR_API_KEY-Homo114514:
+    enabled: true
+    models: [ "*" ] # 可以访问所有模型
+    daily_limit: 1000
+    description: "管理员密钥"
+
+  VPetLLM_By_YCXOM:
+    enabled: true
+    models: [ "蔚蓝档案-中文-心奈" ]
+    daily_limit: 100
+    description: "基础用户密钥"
+
+  demo_key_114514Homo114514:
+    enabled: true
+    models: [ "蔚蓝档案-中文-心奈" ]
+    daily_limit: 50
+    description: "演示用户密钥"
+
+# 默认模型配置
+default_models:
+  # 全局默认模型（当用户未指定模型时使用）
+  fallback_model: "蔚蓝档案-中文-心奈"
+
+  # 按语言分类的默认模型
+  language_defaults:
+    zh: "蔚蓝档案-中文-心奈"
+    ja: "蔚蓝档案-日语-心奈"
+    en: "明日方舟-英语-古米"
+    ko: "蔚蓝档案-韩语-test"
+    yue: "蔚蓝档案-粤语-test"
+
+  # 版本优先级配置（自动版本选择时的优先顺序）
+  version_priority: ["v2ProPlus", "v2Pro", "v4", "v3", "v2"]
+
+  # 默认版本（当用户未指定版本时使用）
+  default_version: "v4"
+
+# 权限控制配置
+permissions:
+  # 是否需要API Key
+  require_api_key: true
+
+  # 是否允许无model_name调用（使用默认模型）
+  allow_no_model_name: true
+
+  # 严格模式：只允许白名单中的模型访问
+  strict_model_access: true
+
+# 使用统计配置
+statistics:
+  # 是否启用使用统计
+  enable_stats: true
+
+  # 统计存储类型：memory, file, database
+  storage_type: "memory"
+
+  # 统计保存时间（天）
+  retention_days: 30
+
+  # 统计面板访问授权码
+  dashboard_auth_code: "GPT-SoVits"
+
+  # 是否启用统计面板授权验证
+  require_dashboard_auth: true
+
+# 安全配置
+security:
+  # 每分钟请求限制
+  rate_limit_per_minute: 60
+
+  # 是否记录请求日志
+  log_requests: true
+
+  # 被禁止的模型列表
+  blocked_models: []
+
+# 日志配置
+logging:
+  # 是否启用日志
+  enable_logging: true
+
+  # 日志级别：debug, info, warning, error
+  log_level: "info"
+
+  # 是否打印URL请求日志（GET/POST端点调用）
+  log_url_requests: true
+
+  # 是否打印TTS合成日志（合成开始、处理时间等）
+  log_tts_synthesis: true
+
+  # 是否打印API调用详情（IP、Key、Model、Text等）
+  log_api_details: true
+
+  # 是否打印请求处理状态（请求ID、完成状态等）
+  log_request_status: true
+
+# 安全配置
+security_features:
+  # 是否启用恶意请求检测
+  enable_malicious_detection: true
+
+  # 是否启用IP黑名单
+  enable_ip_blacklist: true
+
+  # 自动黑名单阈值（达到此次数的恶意请求后自动黑名单）
+  # 例如：设置为5表示同一IP发起5次恶意请求后才会被加入黑名单
+  auto_blacklist_threshold: 5
+
+  # 是否记录恶意请求到数据库
+  log_to_database: true
+
+  # IP白名单（永远不会被加入黑名单）
+  # 本地IP默认在白名单中，无需配置
+  ip_whitelist:
+    - 127.0.0.1               # 本地IPv4
+    - ::1                     # 本地IPv6
+    - localhost               # 本地主机名
+    # - 192.168.1.100         # 可以添加其他信任的IP
+
+  # 白名单路径（跳过安全检测以提高性能）
+  # 这些路径只检查IP黑名单，不进行恶意模式检测
+  whitelist_paths:
+    - /tts                    # TTS合成API（文本内容各异，不需要检测）
+    - /stats                  # 统计面板
+    - /security               # 安全面板
+    - /control                # 控制API
+    - /set_gpt_weights        # 模型切换
+    - /set_sovits_weights     # 模型切换
+    - /set_refer_audio        # 参考音频
+
+# 监控和告警
+monitoring:
+  # 是否启用监控
+  enable_monitoring: true
+
+  # 告警阈值
+  alert_thresholds:
+    daily_requests: 800 # 每日请求数告警
+    error_rate: 0.05 # 错误率告警（5%）
+    avg_response_time: 2.0 # 平均响应时间告警（秒）
+
+# 模型元数据
+model_metadata:
+  "蔚蓝档案-中文-心奈":
+    description: "蔚蓝档案中文女性角色心奈"
+    language: "zh"
+    gender: "female"
+    emotion_support: [ "默认", "开心", "伤心" ]
+    quality: "high"
+
+  "蔚蓝档案-日语-伊吹":
+    description: "蔚蓝档案日语女性角色伊吹"
+    language: "ja"
+    gender: "female"
+    emotion_support: [ "默认", "开心", "伤心" ]
+    quality: "high"
+
+# 高级配置
+advanced:
+  # 是否启用自动负载均衡
+  enable_load_balancing: false
+
+  # 是否启用模型缓存
+  enable_model_cache: true
+
+  # 缓存时间（分钟）
+  cache_ttl: 30
+
+  # 并发请求限制
+  max_concurrent_requests: 10
+
+  # 请求超时时间（秒）
+  request_timeout: 30
