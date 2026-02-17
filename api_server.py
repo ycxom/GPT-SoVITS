@@ -470,7 +470,6 @@ def auto_select_best_version(model_name: str, preferred_version: str = "v4") -> 
 
 
 def auto_get_all_parameters(model_name: str = "", emotion: str = "默认", version: str = "v4"):
-def auto_get_all_parameters(model_name: str = "", emotion: str = "默认", version: str = "v4"):
     """自动获取所有缺失的参数：prompt_lang, ref_audio_path, prompt_text"""
     if model_name == "":
         return "", "", ""
@@ -1145,8 +1144,9 @@ async def tts_handle(req: dict):
     # 3. 模型权限检查和获取
     model_name = req.get("model_name", "")
     text_lang = req.get("text_lang", "")
+    original_text_lang = text_lang  # 保存用户原始传入的语言参数
     text = req.get("text", "")
-    
+
     # 获取用户可访问的模型
     final_model_name, redirect_info, detected_lang = get_model_for_user(user_info['key'], text_lang, model_name, text)
     
@@ -1157,43 +1157,44 @@ async def tts_handle(req: dict):
         if should_log('api_details'):
             print(f"📝 更新请求语言 - 原始: {req.get('text_lang', '')}, 检测后: {detected_lang}")
     
-    # 4. 验证文本语言与模型语言是否匹配，并自动修正
-    is_match, warning_msg = validate_language_match(text, final_model_name)
-    if not is_match:
-        if should_log('api_details'):
-            print(warning_msg)
-        
-        # 检测文本语言并尝试重定向到合适的模型
-        detected_lang = detect_text_language(text)
-        if detected_lang and detected_lang != text_lang:
-            # 更新 text_lang 为检测到的语言
-            text_lang = detected_lang
-            req["text_lang"] = detected_lang
-            
-            # 尝试获取该语言的默认模型
-            suggested_model = get_default_model(detected_lang)
-            
-            # 检查用户是否有权限访问建议的模型
-            if check_model_access(user_info.get('models', ['*']), suggested_model):
-                if should_log('api_details'):
-                    print(f"🔄 自动语言修正 - 检测到文本语言: {detected_lang}, 重定向模型: {final_model_name} -> {suggested_model}")
-                
-                final_model_name = suggested_model
-                req["model_name"] = suggested_model
-                
-                # 更新重定向信息
-                redirect_info.update({
-                    "redirected": True,
-                    "original_model": model_name,
-                    "final_model": suggested_model,
-                    "reason": f"检测到文本语言({detected_lang})与原模型语言不匹配，已自动重定向到合适的{detected_lang}模型"
-                })
+    # 4. 验证文本语言与模型语言是否匹配，并自动修正（仅在 auto 模式下生效）
+    if original_text_lang in ("auto", ""):
+        is_match, warning_msg = validate_language_match(text, final_model_name)
+        if not is_match:
+            if should_log('api_details'):
+                print(warning_msg)
+
+            # 检测文本语言并尝试重定向到合适的模型
+            detected_lang = detect_text_language(text)
+            if detected_lang and detected_lang != text_lang:
+                # 更新 text_lang 为检测到的语言
+                text_lang = detected_lang
+                req["text_lang"] = detected_lang
+
+                # 尝试获取该语言的默认模型
+                suggested_model = get_default_model(detected_lang)
+
+                # 检查用户是否有权限访问建议的模型
+                if check_model_access(user_info.get('models', ['*']), suggested_model):
+                    if should_log('api_details'):
+                        print(f"🔄 自动语言修正 - 检测到文本语言: {detected_lang}, 重定向模型: {final_model_name} -> {suggested_model}")
+
+                    final_model_name = suggested_model
+                    req["model_name"] = suggested_model
+
+                    # 更新重定向信息
+                    redirect_info.update({
+                        "redirected": True,
+                        "original_model": model_name,
+                        "final_model": suggested_model,
+                        "reason": f"检测到文本语言({detected_lang})与原模型语言不匹配，已自动重定向到合适的{detected_lang}模型"
+                    })
+                else:
+                    if should_log('api_details'):
+                        print(f"⚠️ 无法自动修正 - 用户无权限访问建议的{detected_lang}模型: {suggested_model}")
             else:
                 if should_log('api_details'):
-                    print(f"⚠️ 无法自动修正 - 用户无权限访问建议的{detected_lang}模型: {suggested_model}")
-        else:
-            if should_log('api_details'):
-                print("⚠️ 无法自动修正语言不匹配 - 继续使用原模型，可能影响合成质量")
+                    print("⚠️ 无法自动修正语言不匹配 - 继续使用原模型，可能影响合成质量")
     
     # 如果模型发生了变更，记录到req中
     if final_model_name != model_name:
@@ -1312,6 +1313,14 @@ async def tts_handle(req: dict):
         
         # 调用 api_v2.tts_handle 进行实际的 TTS 处理
         response = await api_v2.tts_handle(req)
+
+        # 检查 api_v2 是否返回了错误（静默捕获的异常）
+        if isinstance(response, JSONResponse) and response.status_code >= 400:
+            import json
+            body = json.loads(response.body.decode())
+            print(f"❌ TTS合成失败 - {body}")
+            print(f"❌ 请求文本: {req.get('text', '')[:100]}")
+            print(f"❌ 语言: {req.get('text_lang', '')}, 切分方法: {req.get('text_split_method', '')}")
         
         # 添加企业级功能的响应头
         if redirect_info["redirected"]:
