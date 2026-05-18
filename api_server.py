@@ -146,6 +146,18 @@ import api_v2
 i18n = I18nAuto()
 cut_method_names = get_cut_method_names()
 
+LANG_MAPPING = {
+    "zh": "中文",
+    "en": "英语",
+    "ja": "日语",
+    "yue": "粤语",
+    "ko": "韩语"
+}
+
+LANG_MAPPING_REVERSE = {v: k for k, v in LANG_MAPPING.items()}
+
+VERSION_PRIORITY = ["v2ProPlus", "v2Pro", "v4", "v3", "v2"]
+
 #===============自动获取参考音频和文本的函数================
 
 def get_tag_text(file_name):
@@ -159,20 +171,9 @@ def get_ref_audio(model_name: str, lang: str, emotion: str, version: str = "v4")
     emo = ""
     emo_text = ""
     
-    # 语言代码映射：API语言代码 -> 目录名
-    lang_mapping = {
-        "zh": "中文",
-        "en": "英语",
-        "ja": "日语",
-        "yue": "粤语",
-        "ko": "韩语"
-    }
+    actual_lang = LANG_MAPPING.get(lang, lang)
     
-    # 获取实际的语言目录名
-    actual_lang = lang_mapping.get(lang, lang)
-    
-    # 支持多个版本的查找
-    version_paths = [f"models/{version}", "models/v4", "models/v3", "models/v2"]
+    version_paths = [f"models/{version}"] + [f"models/{v}" for v in VERSION_PRIORITY if v != version]
     
     for version_path in version_paths:
         if Path(f"{version_path}/{model_name}").exists():
@@ -191,8 +192,7 @@ def get_ref_audio(model_name: str, lang: str, emotion: str, version: str = "v4")
 
 def random_ref_audio(model_name: str, lang: str, version: str = "v4"):
     """随机选择参考音频"""
-    # 支持多个版本的查找
-    version_paths = [f"models/{version}", "models/v4", "models/v3", "models/v2"]
+    version_paths = [f"models/{version}"] + [f"models/{v}" for v in VERSION_PRIORITY if v != version]
     
     for version_path in version_paths:
         if Path(f"{version_path}/{model_name}").exists():
@@ -210,17 +210,7 @@ def auto_get_ref_audio_and_prompt_text(model_name: str = "", prompt_lang: str = 
     if model_name == "" or prompt_lang == "":
         return "", ""
     
-    # 语言代码映射：API语言代码 -> 目录名
-    lang_mapping = {
-        "zh": "中文",
-        "en": "英语",
-        "ja": "日语",
-        "yue": "粤语",
-        "ko": "韩语"
-    }
-    
-    # 获取实际的语言目录名
-    actual_lang = lang_mapping.get(prompt_lang, prompt_lang)
+    actual_lang = LANG_MAPPING.get(prompt_lang, prompt_lang)
     
     if emotion == "随机":
         ref_audio, lab_content = random_ref_audio(model_name, actual_lang, version)
@@ -228,8 +218,7 @@ def auto_get_ref_audio_and_prompt_text(model_name: str = "", prompt_lang: str = 
     else:
         emo, prompt_text = get_ref_audio(model_name, prompt_lang, emotion, version)
         if emo != "":
-            # 支持多个版本的查找（按优先级顺序）
-            version_paths = [f"models/{version}", "models/v2ProPlus", "models/v2Pro", "models/v4", "models/v3", "models/v2"]
+            version_paths = [f"models/{version}"] + [f"models/{v}" for v in VERSION_PRIORITY if v != version]
             ref_audio = ""
             for version_path in version_paths:
                 if Path(f"{version_path}/{model_name}").exists():
@@ -264,18 +253,9 @@ def extract_language_from_model_name(model_name: str) -> str:
         match = re.search(pattern, model_name)
         if match:
             extracted = match.group(1) if len(match.groups()) >= 1 else match.group(0)
-            # 如果是语言全称，返回对应的代码
-            language_map = {
-                "中文": "zh",
-                "日语": "ja",
-                "英语": "en",
-                "韩语": "ko",
-                "粤语": "yue"
-            }
-            # 如果匹配到的是下划线开头的语言代码，直接返回
             if extracted in ["zh", "ja", "en", "ko", "yue", "ZH", "JA", "EN", "KO", "YUE"]:
                 return extracted.lower()
-            return language_map.get(extracted, extracted.lower())
+            return LANG_MAPPING_REVERSE.get(extracted, extracted.lower())
     
     return ""
 
@@ -291,7 +271,7 @@ def safe_header_value(value: str) -> str:
     # 尝试编码为ASCII，忽略无法编码的字符
     try:
         return value.encode('ascii', 'ignore').decode('ascii')
-    except:
+    except Exception:
         # 如果还是失败，使用更保守的方法
         safe_chars = []
         for char in value:
@@ -431,10 +411,7 @@ def get_available_model_versions(model_name: str) -> list:
     """获取指定模型名称的所有可用版本"""
     available_versions = []
     
-    # 按优先级顺序检查版本（新版本优先）
-    version_priority = ["v2ProPlus", "v2Pro", "v4", "v3", "v2"]
-    
-    for version in version_priority:
+    for version in VERSION_PRIORITY:
         model_path = Path(f"models/{version}/{model_name}")
         if model_path.exists() and model_path.is_dir():
             # 检查是否有实际的模型文件（不只是.keep文件）
@@ -481,8 +458,7 @@ def auto_get_all_parameters(model_name: str = "", emotion: str = "默认", versi
     auto_prompt_lang = extract_language_from_model_name(model_name)
     
     if not auto_prompt_lang:
-        # 如果从模型名称提取失败，尝试查找第一个可用的语言
-        version_paths = [f"models/{best_version}", "models/v4", "models/v3", "models/v2ProPlus", "models/v2Pro", "models/v2"]
+        version_paths = [f"models/{best_version}"] + [f"models/{v}" for v in VERSION_PRIORITY if v != best_version]
         for version_path in version_paths:
             model_path = Path(f"{version_path}/{model_name}")
             if model_path.exists():
@@ -492,15 +468,7 @@ def auto_get_all_parameters(model_name: str = "", emotion: str = "默认", versi
                     lang_dirs = [d for d in ref_audios_path.iterdir() if d.is_dir()]
                     if lang_dirs:
                         first_lang_dir = lang_dirs[0].name
-                        # 将目录名映射回语言代码
-                        dir_to_lang_mapping = {
-                            "中文": "zh",
-                            "英语": "en", 
-                            "日语": "ja",
-                            "粤语": "yue",
-                            "韩语": "ko"
-                        }
-                        auto_prompt_lang = dir_to_lang_mapping.get(first_lang_dir, "zh")
+                        auto_prompt_lang = LANG_MAPPING_REVERSE.get(first_lang_dir, "zh")
                         break
     
     # 如果还是没找到语言，使用默认语言
@@ -518,6 +486,133 @@ API_CONFIG = {}
 USAGE_STATS = defaultdict(list)
 RATE_LIMIT = defaultdict(list)
 PROCESSING_REQUESTS = {}  # 正在处理的请求（用于去重）
+
+IP_REQUEST_LOG = defaultdict(list)
+IP_TOKEN_LOG = defaultdict(list)
+IP_BAN_LIST = {}
+
+IP_DEFAULT_LIMITS = {
+    "single_max_chars": 100,
+    "minute_max_chars": 5000,
+    "minute_max_requests": 80,
+    "five_minute_max_requests": 400,
+    "ban_duration": 300,
+}
+
+def get_ip_rate_limit_config(api_key: str = "") -> dict:
+    key_info = API_CONFIG.get("api_keys", {}).get(api_key, {})
+    mode = key_info.get("ip_rate_limit_mode", "global")
+
+    if mode == "none":
+        return None
+
+    if mode == "custom":
+        custom = key_info.get("ip_rate_limit", {})
+        return {
+            "single_max_chars": custom.get("single_max_chars", IP_DEFAULT_LIMITS["single_max_chars"]),
+            "minute_max_chars": custom.get("minute_max_chars", IP_DEFAULT_LIMITS["minute_max_chars"]),
+            "minute_max_requests": custom.get("minute_max_requests", IP_DEFAULT_LIMITS["minute_max_requests"]),
+            "five_minute_max_requests": custom.get("five_minute_max_requests", IP_DEFAULT_LIMITS["five_minute_max_requests"]),
+            "ban_duration": custom.get("ban_duration", IP_DEFAULT_LIMITS["ban_duration"]),
+        }
+
+    global_cfg = API_CONFIG.get("security", {}).get("ip_rate_limit", {})
+    return {
+        "single_max_chars": global_cfg.get("single_max_chars", IP_DEFAULT_LIMITS["single_max_chars"]),
+        "minute_max_chars": global_cfg.get("minute_max_chars", IP_DEFAULT_LIMITS["minute_max_chars"]),
+        "minute_max_requests": global_cfg.get("minute_max_requests", IP_DEFAULT_LIMITS["minute_max_requests"]),
+        "five_minute_max_requests": global_cfg.get("five_minute_max_requests", IP_DEFAULT_LIMITS["five_minute_max_requests"]),
+        "ban_duration": global_cfg.get("ban_duration", IP_DEFAULT_LIMITS["ban_duration"]),
+    }
+
+def is_ip_rate_limit_enabled() -> bool:
+    return API_CONFIG.get("security", {}).get("ip_rate_limit", {}).get("enabled", True)
+
+def count_cjk_chars(text: str) -> int:
+    if not text:
+        return 0
+    cjk_pattern = re.compile(
+        r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff'
+        r'\u3000-\u303f\uff00-\uffef'
+        r'\u2e80-\u2eff\u31c0-\u31ef\u3200-\u32ff'
+        r'\u3300-\u33bf\ufe30-\ufe4f\uf900-\ufaff'
+        r'\u2f800-\u2fa1f]'
+    )
+    return len(cjk_pattern.findall(text))
+
+def check_ip_rate_limit(client_ip: str, text: str, limits: dict = None) -> tuple:
+
+    if not is_ip_rate_limit_enabled():
+        return True, ""
+
+    if limits is None:
+        limits = get_ip_rate_limit_config("")
+
+    if limits is None:
+        return True, ""
+
+    single_max_chars = limits.get("single_max_chars", 100)
+    minute_max_chars = limits.get("minute_max_chars", 5000)
+    minute_max_requests = limits.get("minute_max_requests", 80)
+    five_minute_max_requests = limits.get("five_minute_max_requests", 400)
+    ban_duration = limits.get("ban_duration", 300)
+
+    now = time.time()
+
+    if client_ip in IP_BAN_LIST:
+        ban_until = IP_BAN_LIST[client_ip]
+        if now < ban_until:
+            remaining = int(ban_until - now)
+            return False, f"IP banned, remaining {remaining}s"
+        del IP_BAN_LIST[client_ip]
+
+    cjk_count = count_cjk_chars(text)
+
+    if cjk_count > single_max_chars:
+        IP_BAN_LIST[client_ip] = now + ban_duration
+        print(f"\U0001f6ab IP封禁(单次超限) - IP: {client_ip}, 字符数: {cjk_count}, 阈值: {single_max_chars}")
+        return False, f"Single request exceeds {single_max_chars} chars"
+
+    IP_REQUEST_LOG[client_ip].append(now)
+    IP_TOKEN_LOG[client_ip].append((now, cjk_count))
+
+    cutoff_1m = now - 60
+    cutoff_5m = now - 300
+
+    IP_REQUEST_LOG[client_ip] = [
+        t for t in IP_REQUEST_LOG[client_ip] if t > cutoff_5m
+    ]
+    IP_TOKEN_LOG[client_ip] = [
+        (t, c) for t, c in IP_TOKEN_LOG[client_ip] if t > max(cutoff_1m, cutoff_5m)
+    ]
+
+    requests_1m = sum(1 for t in IP_REQUEST_LOG[client_ip] if t > cutoff_1m)
+    requests_5m = len(IP_REQUEST_LOG[client_ip])
+    tokens_1m = sum(c for t, c in IP_TOKEN_LOG[client_ip] if t > cutoff_1m)
+
+    if requests_1m > minute_max_requests:
+        IP_BAN_LIST[client_ip] = now + ban_duration
+        print(f"\U0001f6ab IP封禁(1分钟请求超限) - IP: {client_ip}, 请求数: {requests_1m}, 阈值: {minute_max_requests}")
+        return False, f"Too many requests per minute"
+
+    if requests_5m > five_minute_max_requests:
+        IP_BAN_LIST[client_ip] = now + ban_duration
+        print(f"\U0001f6ab IP封禁(5分钟请求超限) - IP: {client_ip}, 请求数: {requests_5m}, 阈值: {five_minute_max_requests}")
+        return False, f"Too many requests per 5 minutes"
+
+    if tokens_1m > minute_max_chars:
+        IP_BAN_LIST[client_ip] = now + ban_duration
+        print(f"\U0001f6ab IP封禁(每分钟token超限) - IP: {client_ip}, token数: {tokens_1m}, 阈值: {minute_max_chars}")
+        return False, f"Too many tokens per minute"
+
+    return True, ""
+
+def check_ip_ban(client_ip: str) -> bool:
+    if client_ip in IP_BAN_LIST:
+        if time.time() < IP_BAN_LIST[client_ip]:
+            return True
+        del IP_BAN_LIST[client_ip]
+    return False
 
 def load_api_config():
     """加载API配置文件"""
@@ -553,7 +648,15 @@ def load_api_config():
             'security': {
                 'rate_limit_per_minute': 60,
                 'log_requests': True,
-                'blocked_models': []
+                'blocked_models': [],
+                'ip_rate_limit': {
+                    'enabled': True,
+                    'single_max_chars': 100,
+                    'minute_max_chars': 5000,
+                    'minute_max_requests': 80,
+                    'five_minute_max_requests': 400,
+                    'ban_duration': 300
+                }
             },
             'logging': {
                 'enable_logging': True,
@@ -820,7 +923,7 @@ try:
         details=f"版本: {tts_config.version}",
         status="success"
     )
-except:
+except Exception:
     pass
 
 APP = FastAPI()
@@ -832,7 +935,13 @@ async def security_middleware(request: Request, call_next):
     stats_manager = get_stats_manager()
     client_ip = get_real_ip(request)
     path = request.url.path
-    
+
+    if check_ip_ban(client_ip):
+        return JSONResponse(
+            status_code=429,
+            content={"message": "IP is banned due to rate limit violation"}
+        )
+
     # 获取白名单配置
     whitelist_paths = API_CONFIG.get('security_features', {}).get('whitelist_paths', [
         '/tts', '/stats', '/security', '/control', 
@@ -872,7 +981,7 @@ async def security_middleware(request: Request, call_next):
         if method in ["POST", "PUT", "PATCH"]:
             body = await request.body()
             request_body = body.decode('utf-8', errors='ignore')[:500]  # 限制长度
-    except:
+    except Exception:
         pass
     
     # 检测恶意请求（使用security_manager中的方法）
@@ -1085,7 +1194,26 @@ async def tts_handle(req: dict):
     
     # 标记请求正在处理
     PROCESSING_REQUESTS[request_id] = time.time()
-    
+
+    client_ip = req.get("client_ip", "unknown")
+
+    is_banned = check_ip_ban(client_ip)
+    if is_banned:
+        return JSONResponse(
+            status_code=429,
+            content={"message": "IP is banned due to rate limit violation"}
+        )
+
+    api_key_early = req.get("api_key", "")
+    ip_limits = get_ip_rate_limit_config(api_key_early)
+
+    allowed, limit_reason = check_ip_rate_limit(client_ip, req.get("text", ""), ip_limits)
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={"message": limit_reason}
+        )
+
     # ========== 企业级功能集成 ==========
     
     # 1. API Key认证
@@ -1557,7 +1685,7 @@ async def set_gpt_weights(weights_path: str = None):
                 status="failed",
                 duration=time.time() - load_start
             )
-    except:
+    except Exception:
         pass
     
     return result
@@ -1569,7 +1697,6 @@ async def set_sovits_weights(weights_path: str = None):
     load_start = time.time()
     result = await api_v2.set_sovits_weights(weights_path)
     
-    # 记录模型切换事件
     try:
         stats_manager = get_stats_manager()
         if result.status_code == 200:
@@ -1588,7 +1715,7 @@ async def set_sovits_weights(weights_path: str = None):
                 status="failed",
                 duration=time.time() - load_start
             )
-    except:
+    except Exception:
         pass
     
     return result

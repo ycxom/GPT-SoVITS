@@ -9,18 +9,26 @@ api_keys:
     models: [ "*" ] # 可以访问所有模型
     daily_limit: 1000
     description: "管理员密钥"
+    ip_rate_limit_mode: "none"
 
   VPetLLM_By_YCXOM:
     enabled: true
     models: [ "蔚蓝档案-中文-心奈" ]
     daily_limit: 100
     description: "基础用户密钥"
+    ip_rate_limit_mode: "global"
 
   demo_key_114514Homo114514:
     enabled: true
     models: [ "蔚蓝档案-中文-心奈" ]
     daily_limit: 50
     description: "演示用户密钥"
+    ip_rate_limit_mode: "custom"
+    ip_rate_limit:
+      single_max_chars: 50
+      minute_max_chars: 2000
+      minute_max_requests: 30
+      five_minute_max_requests: 150
 
 # 默认模型配置
 default_models:
@@ -71,7 +79,7 @@ statistics:
 
 # 安全配置
 security:
-  # 每分钟请求限制
+  # 每分钟请求限制（针对 API Key）
   rate_limit_per_minute: 60
 
   # 是否记录请求日志
@@ -79,6 +87,15 @@ security:
 
   # 被禁止的模型列表
   blocked_models: []
+
+  # IP 限流全局配置（当 key 的 ip_rate_limit_mode 为 "global" 时使用）
+  ip_rate_limit:
+    enabled: true
+    single_max_chars: 100
+    minute_max_chars: 5000
+    minute_max_requests: 80
+    five_minute_max_requests: 400
+    ban_duration: 300
 
 # 日志配置
 logging:
