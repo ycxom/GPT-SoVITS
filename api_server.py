@@ -1543,6 +1543,11 @@ async def tts_handle(req: dict):
         return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(e)})
 
 
+@APP.get("/health")
+async def health_check():
+    return JSONResponse(status_code=200, content={"status": "ok"})
+
+
 @APP.get("/control")
 async def control(command: str = None):
     """代理到 api_v2.control"""
