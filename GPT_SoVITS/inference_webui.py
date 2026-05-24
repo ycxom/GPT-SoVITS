@@ -101,6 +101,7 @@ cnhubert.cnhubert_base_path = cnhubert_base_path
 import random
 
 from GPT_SoVITS.module.models import Generator, SynthesizerTrn, SynthesizerTrnV3
+from GPT_SoVITS.text_filter import filter_text
 
 
 def set_seed(seed):
@@ -812,7 +813,10 @@ def get_tts_wav(
     else:
         gr.Warning(i18n("请上传参考音频"))
     if text:
-        pass
+        blocked, keyword = filter_text(text)
+        if blocked:
+            gr.Warning(i18n(f"文本包含屏蔽词: {keyword}"))
+            return None
     else:
         gr.Warning(i18n("请填入推理文本"))
     t = []

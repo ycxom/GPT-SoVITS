@@ -123,6 +123,7 @@ from io import BytesIO
 from tools.i18n.i18n import I18nAuto
 from GPT_SoVITS.TTS_infer_pack.TTS import TTS, TTS_Config
 from GPT_SoVITS.TTS_infer_pack.text_segmentation_method import get_method_names as get_cut_method_names
+from GPT_SoVITS.text_filter import filter_text
 from pydantic import BaseModel
 import threading
 
@@ -315,6 +316,9 @@ def check_params(req: dict):
         return JSONResponse(status_code=400, content={"message": "ref_audio_path is required"})
     if text in [None, ""]:
         return JSONResponse(status_code=400, content={"message": "text is required"})
+    blocked, keyword = filter_text(text)
+    if blocked:
+        return JSONResponse(status_code=400, content={"message": f"text contains blocked keyword: {keyword}"})
     if text_lang in [None, ""]:
         return JSONResponse(status_code=400, content={"message": "text_lang is required"})
     elif text_lang.lower() not in tts_config.languages:

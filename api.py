@@ -173,6 +173,8 @@ import config as global_config
 import logging
 import subprocess
 
+from GPT_SoVITS.text_filter import filter_text
+
 
 class DefaultRefer:
     def __init__(self, path, text, language):
@@ -1112,6 +1114,10 @@ def handle(
     sample_steps,
     if_sr,
 ):
+    blocked, keyword = filter_text(text)
+    if blocked:
+        return JSONResponse(status_code=400, content={"message": f"text contains blocked keyword: {keyword}"})
+
     if (
         refer_wav_path == ""
         or refer_wav_path is None

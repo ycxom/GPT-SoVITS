@@ -490,6 +490,7 @@ PROCESSING_REQUESTS = {}  # 正在处理的请求（用于去重）
 IP_REQUEST_LOG = defaultdict(list)
 IP_TOKEN_LOG = defaultdict(list)
 IP_BAN_LIST = {}
+IP_VIOLATION_TIMESTAMPS = defaultdict(list)
 
 IP_DEFAULT_LIMITS = {
     "single_max_chars": 100,
@@ -497,6 +498,8 @@ IP_DEFAULT_LIMITS = {
     "minute_max_requests": 80,
     "five_minute_max_requests": 400,
     "ban_duration": 300,
+    "consecutive_ban_threshold": 3,
+    "consecutive_ban_window": 60,
 }
 
 def get_ip_rate_limit_config(api_key: str = "") -> dict:
@@ -514,6 +517,8 @@ def get_ip_rate_limit_config(api_key: str = "") -> dict:
             "minute_max_requests": custom.get("minute_max_requests", IP_DEFAULT_LIMITS["minute_max_requests"]),
             "five_minute_max_requests": custom.get("five_minute_max_requests", IP_DEFAULT_LIMITS["five_minute_max_requests"]),
             "ban_duration": custom.get("ban_duration", IP_DEFAULT_LIMITS["ban_duration"]),
+            "consecutive_ban_threshold": custom.get("consecutive_ban_threshold", IP_DEFAULT_LIMITS["consecutive_ban_threshold"]),
+            "consecutive_ban_window": custom.get("consecutive_ban_window", IP_DEFAULT_LIMITS["consecutive_ban_window"]),
         }
 
     global_cfg = API_CONFIG.get("security", {}).get("ip_rate_limit", {})
@@ -523,6 +528,8 @@ def get_ip_rate_limit_config(api_key: str = "") -> dict:
         "minute_max_requests": global_cfg.get("minute_max_requests", IP_DEFAULT_LIMITS["minute_max_requests"]),
         "five_minute_max_requests": global_cfg.get("five_minute_max_requests", IP_DEFAULT_LIMITS["five_minute_max_requests"]),
         "ban_duration": global_cfg.get("ban_duration", IP_DEFAULT_LIMITS["ban_duration"]),
+        "consecutive_ban_threshold": global_cfg.get("consecutive_ban_threshold", IP_DEFAULT_LIMITS["consecutive_ban_threshold"]),
+        "consecutive_ban_window": global_cfg.get("consecutive_ban_window", IP_DEFAULT_LIMITS["consecutive_ban_window"]),
     }
 
 def is_ip_rate_limit_enabled() -> bool:
@@ -556,6 +563,8 @@ def check_ip_rate_limit(client_ip: str, text: str, limits: dict = None) -> tuple
     minute_max_requests = limits.get("minute_max_requests", 80)
     five_minute_max_requests = limits.get("five_minute_max_requests", 400)
     ban_duration = limits.get("ban_duration", 300)
+    consecutive_ban_threshold = limits.get("consecutive_ban_threshold", 3)
+    consecutive_ban_window = limits.get("consecutive_ban_window", 60)
 
     now = time.time()
 
@@ -565,13 +574,14 @@ def check_ip_rate_limit(client_ip: str, text: str, limits: dict = None) -> tuple
             remaining = int(ban_until - now)
             return False, f"IP banned, remaining {remaining}s"
         del IP_BAN_LIST[client_ip]
+        IP_VIOLATION_TIMESTAMPS.pop(client_ip, None)
 
     cjk_count = count_cjk_chars(text)
 
+    violation_reason = None
+
     if cjk_count > single_max_chars:
-        IP_BAN_LIST[client_ip] = now + ban_duration
-        print(f"\U0001f6ab IP封禁(单次超限) - IP: {client_ip}, 字符数: {cjk_count}, 阈值: {single_max_chars}")
-        return False, f"Single request exceeds {single_max_chars} chars"
+        violation_reason = f"Single request exceeds {single_max_chars} chars"
 
     IP_REQUEST_LOG[client_ip].append(now)
     IP_TOKEN_LOG[client_ip].append((now, cjk_count))
@@ -590,20 +600,32 @@ def check_ip_rate_limit(client_ip: str, text: str, limits: dict = None) -> tuple
     requests_5m = len(IP_REQUEST_LOG[client_ip])
     tokens_1m = sum(c for t, c in IP_TOKEN_LOG[client_ip] if t > cutoff_1m)
 
-    if requests_1m > minute_max_requests:
-        IP_BAN_LIST[client_ip] = now + ban_duration
-        print(f"\U0001f6ab IP封禁(1分钟请求超限) - IP: {client_ip}, 请求数: {requests_1m}, 阈值: {minute_max_requests}")
-        return False, f"Too many requests per minute"
+    if violation_reason is None and requests_1m > minute_max_requests:
+        violation_reason = f"Too many requests per minute"
+    if violation_reason is None and requests_5m > five_minute_max_requests:
+        violation_reason = f"Too many requests per 5 minutes"
+    if violation_reason is None and tokens_1m > minute_max_chars:
+        violation_reason = f"Too many tokens per minute"
 
-    if requests_5m > five_minute_max_requests:
-        IP_BAN_LIST[client_ip] = now + ban_duration
-        print(f"\U0001f6ab IP封禁(5分钟请求超限) - IP: {client_ip}, 请求数: {requests_5m}, 阈值: {five_minute_max_requests}")
-        return False, f"Too many requests per 5 minutes"
+    if violation_reason is not None:
+        timestamps = IP_VIOLATION_TIMESTAMPS[client_ip]
+        timestamps.append(now)
 
-    if tokens_1m > minute_max_chars:
-        IP_BAN_LIST[client_ip] = now + ban_duration
-        print(f"\U0001f6ab IP封禁(每分钟token超限) - IP: {client_ip}, token数: {tokens_1m}, 阈值: {minute_max_chars}")
-        return False, f"Too many tokens per minute"
+        window_cutoff = now - consecutive_ban_window
+        timestamps[:] = [t for t in timestamps if t > window_cutoff]
+
+        consecutive_count = len(timestamps)
+
+        if consecutive_count >= consecutive_ban_threshold:
+            IP_BAN_LIST[client_ip] = now + ban_duration
+            IP_VIOLATION_TIMESTAMPS.pop(client_ip, None)
+            print(f"\U0001f6ab IP封禁(连续触发) - IP: {client_ip}, 原因: {violation_reason}, {consecutive_ban_window}秒内违规: {consecutive_count}/{consecutive_ban_threshold}")
+            return False, violation_reason
+
+        print(f"\u26a0\ufe0f IP限流警告 - IP: {client_ip}, 原因: {violation_reason}, {consecutive_ban_window}秒内违规: {consecutive_count}/{consecutive_ban_threshold} (尚未封禁)")
+        return True, ""
+
+    IP_VIOLATION_TIMESTAMPS[client_ip] = []
 
     return True, ""
 
@@ -655,7 +677,9 @@ def load_api_config():
                     'minute_max_chars': 5000,
                     'minute_max_requests': 80,
                     'five_minute_max_requests': 400,
-                    'ban_duration': 300
+                    'ban_duration': 300,
+                    'consecutive_ban_threshold': 3,
+                    'consecutive_ban_window': 60
                 }
             },
             'logging': {

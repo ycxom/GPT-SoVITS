@@ -96,6 +96,8 @@ security:
     minute_max_requests: 80
     five_minute_max_requests: 400
     ban_duration: 300
+    consecutive_ban_threshold: 3      # 连续违规多少次才触发封禁
+    consecutive_ban_window: 60        # 违规检测时间窗口（秒），在此时间窗口内达到阈值即封禁
 
 # 日志配置
 logging:
