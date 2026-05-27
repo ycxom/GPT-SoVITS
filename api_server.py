@@ -630,10 +630,14 @@ def check_ip_rate_limit(client_ip: str, text: str, limits: dict = None) -> tuple
     return True, ""
 
 def check_ip_ban(client_ip: str) -> bool:
+    if not is_ip_rate_limit_enabled():
+        return False
     if client_ip in IP_BAN_LIST:
         if time.time() < IP_BAN_LIST[client_ip]:
             return True
         del IP_BAN_LIST[client_ip]
+        IP_VIOLATION_TIMESTAMPS.pop(client_ip, None)
+        print(f"✅ IP封禁已过期 - IP: {client_ip}")
     return False
 
 def load_api_config():
@@ -961,6 +965,8 @@ async def security_middleware(request: Request, call_next):
     path = request.url.path
 
     if check_ip_ban(client_ip):
+        ban_remaining = int(IP_BAN_LIST.get(client_ip, 0) - time.time())
+        print(f"🚫 中间件拦截(IP封禁) - IP: {client_ip}, 剩余: {ban_remaining}s, 路径: {path}")
         return JSONResponse(
             status_code=429,
             content={"message": "IP is banned due to rate limit violation"}
