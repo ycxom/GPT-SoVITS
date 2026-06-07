@@ -330,7 +330,30 @@ def text_normalize(text):
 
     # 避免重复标点引起的参考泄露
     dest_text = replace_consecutive_punctuation(dest_text)
+
+    # 过滤不支持的表情符号和特殊字符（泰文、emoji等），只保留中日韩和ASCII字符
+    dest_text = _filter_unsupported_chars(dest_text)
     return dest_text
+
+
+def _filter_unsupported_chars(text):
+    valid_ranges = [
+        (0x4E00, 0x9FFF),   # CJK Unified Ideographs
+        (0x3400, 0x4DBF),   # CJK Extension A
+        (0x3000, 0x303F),   # CJK Symbols and Punctuation
+        (0xFF00, 0xFFEF),   # Halfwidth and Fullwidth Forms
+        (0x0020, 0x007E),   # ASCII printable
+        (0x2000, 0x206F),   # General Punctuation
+        (0xFE10, 0xFE1F),   # Vertical Forms
+        (0xFE30, 0xFE4F),   # CJK Compatibility Forms
+    ]
+    result = []
+    for char in text:
+        code = ord(char)
+        allowed = any(low <= code <= high for low, high in valid_ranges)
+        if allowed:
+            result.append(char)
+    return ''.join(result)
 
 
 if __name__ == "__main__":
