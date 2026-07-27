@@ -1458,6 +1458,12 @@ async def tts_handle(req: dict):
     # 更新 streaming_mode 状态用于后续判断
     streaming_mode = streaming_mode or return_fragment
 
+    # 防止 speed_factor<=0 导致模型端除零崩溃（models.py:260）
+    speed_factor = req.get("speed_factor", 1.0)
+    if speed_factor is None or speed_factor <= 0:
+        speed_factor = 0.05
+    req["speed_factor"] = speed_factor
+
     try:
         # 4. 记录请求日志
         if API_CONFIG.get('security', {}).get('log_requests', True) and should_log('api_details'):
