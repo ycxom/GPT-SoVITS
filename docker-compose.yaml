@@ -8,6 +8,7 @@ services:
         PYTHON_VERSION: "3.12"
         CUDA_VERSION: "${CUDA_VERSION:-12.8}"
         WORKFLOW: "true"
+        DOWNLOAD_SOURCE: "${DOWNLOAD_SOURCE:-auto}"
     container_name: gpt-sovits-api
     ports:
       - "${API_PORT:-9880}:9880"

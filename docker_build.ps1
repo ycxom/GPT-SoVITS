@@ -3,7 +3,10 @@ param(
     [ValidateSet("12.6", "12.8", "13.0")]
     [string]$CudaVersion,
 
-    [string]$PythonVersion = "3.12"
+    [string]$PythonVersion = "3.12",
+
+    [ValidateSet("auto", "official", "ustc", "tuna")]
+    [string]$DownloadSource = "auto"
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,13 +49,14 @@ switch ($architecture) {
     default { throw "Unsupported architecture: $architecture" }
 }
 
-Write-Host "Building with Python $PythonVersion, CUDA $CudaVersion, platform $targetPlatform"
+Write-Host "Building with Python $PythonVersion, CUDA $CudaVersion, platform $targetPlatform, source $DownloadSource"
 
 docker build `
     --build-arg "CUDA_VERSION=$CudaVersion" `
     --build-arg "PYTHON_VERSION=$PythonVersion" `
     --build-arg "TARGETPLATFORM=$targetPlatform" `
     --build-arg "WORKFLOW=true" `
+    --build-arg "DOWNLOAD_SOURCE=$DownloadSource" `
     --tag "gpt-sovits-api:local" `
     .
 

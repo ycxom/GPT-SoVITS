@@ -7,6 +7,7 @@ cd "$SCRIPT_DIR"
 
 PYTHON_VERSION=3.12
 CUDA_VERSION=""
+DOWNLOAD_SOURCE=auto
 
 print_help() {
     echo "Usage: bash docker_build.sh [OPTIONS]"
@@ -17,6 +18,7 @@ print_help() {
     echo "Options:"
     echo "  --cuda 12.6|12.8|13.0  Override automatic CUDA detection"
     echo "  --python 3.12           Override the recommended Python version"
+    echo "  --source MODE           Download source: auto, official, ustc, tuna"
     echo "  -h, --help              Show this help message and exit"
 }
 
@@ -72,6 +74,10 @@ while [[ $# -gt 0 ]]; do
         PYTHON_VERSION="${2:-}"
         shift 2
         ;;
+    --source)
+        DOWNLOAD_SOURCE="${2:-}"
+        shift 2
+        ;;
     -h | --help)
         print_help
         exit 0
@@ -97,6 +103,15 @@ case "$CUDA_VERSION" in
     ;;
 esac
 
+case "$DOWNLOAD_SOURCE" in
+auto | official | ustc | tuna) ;;
+*)
+    echo "Unsupported download source: $DOWNLOAD_SOURCE" >&2
+    echo "Choose from: auto, official, ustc, tuna" >&2
+    exit 1
+    ;;
+esac
+
 case "$(uname -m)" in
 x86_64 | amd64) TARGET_PLATFORM="linux/amd64" ;;
 aarch64 | arm64) TARGET_PLATFORM="linux/arm64" ;;
@@ -106,12 +121,13 @@ aarch64 | arm64) TARGET_PLATFORM="linux/arm64" ;;
     ;;
 esac
 
-echo "Building with Python ${PYTHON_VERSION}, CUDA ${CUDA_VERSION}, platform ${TARGET_PLATFORM}"
+echo "Building with Python ${PYTHON_VERSION}, CUDA ${CUDA_VERSION}, platform ${TARGET_PLATFORM}, source ${DOWNLOAD_SOURCE}"
 
 docker build \
     --build-arg "CUDA_VERSION=${CUDA_VERSION}" \
     --build-arg "PYTHON_VERSION=${PYTHON_VERSION}" \
     --build-arg "TARGETPLATFORM=${TARGET_PLATFORM}" \
     --build-arg "WORKFLOW=true" \
+    --build-arg "DOWNLOAD_SOURCE=${DOWNLOAD_SOURCE}" \
     --tag "gpt-sovits-api:local" \
     .

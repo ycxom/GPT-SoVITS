@@ -7,6 +7,7 @@ ARG PYTHON_VERSION=3.12
 ARG CUDA_VERSION=12.8
 ARG TARGETPLATFORM=linux/amd64
 ARG WORKFLOW=true
+ARG DOWNLOAD_SOURCE=auto
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -19,7 +20,17 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-RUN apt-get update \
+WORKDIR /workspace/GPT-SoVITS
+
+COPY Docker/select_download_source.sh Docker/select_download_source.sh
+
+RUN bash Docker/select_download_source.sh "${DOWNLOAD_SOURCE}" > /etc/download-source.env \
+    && source /etc/download-source.env \
+    && sed -i \
+      -e "s|http://deb.debian.org|${APT_MIRROR}|g" \
+      -e "s|https://deb.debian.org|${APT_MIRROR}|g" \
+      /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install --yes --no-install-recommends \
       build-essential \
       ca-certificates \
@@ -33,8 +44,6 @@ RUN apt-get update \
       unzip \
       wget \
     && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /workspace/GPT-SoVITS
 
 COPY Docker/miniforge_install.sh Docker/miniforge_install.sh
 

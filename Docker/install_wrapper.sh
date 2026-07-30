@@ -8,6 +8,11 @@ cd .. || exit 1
 
 set -e
 
+if [ -f /etc/download-source.env ]; then
+    source /etc/download-source.env
+    export PIP_INDEX_URL
+fi
+
 source "$HOME/conda/etc/profile.d/conda.sh"
 
 mkdir -p GPT_SoVITS
@@ -18,7 +23,7 @@ ln -s /workspace/models/pretrained_models /workspace/GPT-SoVITS/GPT_SoVITS/pretr
 
 ln -s /workspace/models/G2PWModel /workspace/GPT-SoVITS/GPT_SoVITS/text/G2PWModel
 
-TERM=dumb bash install.sh --device "CU${CUDA_VERSION//./}" --source HF
+TERM=dumb bash install.sh --device "CU${CUDA_VERSION//./}" --source "${MODEL_SOURCE:-HF}"
 
 pip cache purge
 

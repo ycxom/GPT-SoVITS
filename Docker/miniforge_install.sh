@@ -2,6 +2,11 @@
 
 set -e
 
+if [ -f /etc/download-source.env ]; then
+    source /etc/download-source.env
+    export PIP_INDEX_URL
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
 cd "$SCRIPT_DIR" || exit 1
@@ -50,6 +55,11 @@ source "$HOME/conda/etc/profile.d/conda.sh"
 "$HOME/conda/bin/conda" init bash
 
 source "$HOME/.bashrc"
+
+if [ -n "${CONDA_MIRROR:-}" ]; then
+    "$HOME/conda/bin/conda" config --system --set show_channel_urls yes
+    "$HOME/conda/bin/conda" config --system --set custom_channels.conda-forge "${CONDA_MIRROR}"
+fi
 
 "$HOME/conda/bin/conda" info
 
