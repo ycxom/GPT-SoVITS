@@ -1,84 +1,117 @@
 #!/bin/bash
 
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+cd "$SCRIPT_DIR"
 
-cd "$SCRIPT_DIR" || exit 1
-
-set -e
-
-if ! command -v docker &>/dev/null; then
-    echo "Docker Not Found"
-    exit 1
-fi
-
-trap 'echo "Error Occured at \"$BASH_COMMAND\" with exit code $?"; exit 1' ERR
-
-LITE=false
-CUDA_VERSION=12.6
-WORKFLOW=true
+PYTHON_VERSION=3.12
+CUDA_VERSION=""
 
 print_help() {
     echo "Usage: bash docker_build.sh [OPTIONS]"
     echo ""
-    echo "Options:"
-    echo "  --cuda 12.6|12.8    Specify the CUDA VERSION (REQUIRED)"
-    echo "  --lite              Build a Lite Image"
-    echo "  -h, --help          Show this help message and exit"
+    echo "Builds the Debian 13 API image using the best supported CUDA runtime."
+    echo "The CUDA version is detected from the local NVIDIA driver by default."
     echo ""
-    echo "Examples:"
-    echo "  bash docker_build.sh --cuda 12.6 --funasr --faster-whisper"
+    echo "Options:"
+    echo "  --cuda 12.6|12.8|13.0  Override automatic CUDA detection"
+    echo "  --python 3.12           Override the recommended Python version"
+    echo "  -h, --help              Show this help message and exit"
 }
 
-# Show help if no arguments provided
-if [[ $# -eq 0 ]]; then
-    print_help
-    exit 0
-fi
+select_cuda_runtime() {
+    local driver_cuda="$1"
+    local major minor
 
-# Parse arguments
+    IFS=. read -r major minor <<<"$driver_cuda"
+    minor="${minor:-0}"
+
+    if ((major >= 13)); then
+        echo "13.0"
+    elif ((major == 12 && minor >= 8)); then
+        echo "12.8"
+    elif ((major == 12 && minor >= 6)); then
+        echo "12.6"
+    else
+        echo "Unsupported NVIDIA driver CUDA compatibility: ${driver_cuda}" >&2
+        echo "CUDA 12.6 or newer is required." >&2
+        return 1
+    fi
+}
+
+detect_cuda_runtime() {
+    local driver_cuda
+
+    if ! command -v nvidia-smi &>/dev/null; then
+        echo "nvidia-smi was not found. Install an NVIDIA driver or pass --cuda." >&2
+        return 1
+    fi
+
+    driver_cuda="$(
+        nvidia-smi 2>/dev/null |
+            sed -n 's/.*CUDA Version: \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' |
+            head -n 1
+    )"
+
+    if [[ -z "$driver_cuda" ]]; then
+        echo "Unable to detect CUDA compatibility from nvidia-smi." >&2
+        return 1
+    fi
+
+    select_cuda_runtime "$driver_cuda"
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
     --cuda)
-        case "$2" in
-        12.6)
-            CUDA_VERSION=12.6
-            ;;
-        12.8)
-            CUDA_VERSION=12.8
-            ;;
-        *)
-            echo "Error: Invalid CUDA_VERSION: $2"
-            echo "Choose From: [12.6, 12.8]"
-            exit 1
-            ;;
-        esac
+        CUDA_VERSION="${2:-}"
         shift 2
         ;;
-    --lite)
-        LITE=true
-        shift
+    --python)
+        PYTHON_VERSION="${2:-}"
+        shift 2
+        ;;
+    -h | --help)
+        print_help
+        exit 0
         ;;
     *)
-        echo "Unknown Argument: $1"
-        echo "Use -h or --help to see available options."
+        echo "Unknown argument: $1" >&2
+        print_help
         exit 1
         ;;
     esac
 done
 
-TARGETPLATFORM=$(uname -m | grep -q 'x86' && echo "linux/amd64" || echo "linux/arm64")
-
-if [ $LITE = true ]; then
-    TORCH_BASE="lite"
-else
-    TORCH_BASE="full"
+if [[ -z "$CUDA_VERSION" ]]; then
+    CUDA_VERSION="$(detect_cuda_runtime)"
 fi
 
+case "$CUDA_VERSION" in
+12.6 | 12.8 | 13.0) ;;
+*)
+    echo "Unsupported CUDA runtime: $CUDA_VERSION" >&2
+    echo "Choose from: 12.6, 12.8, 13.0" >&2
+    exit 1
+    ;;
+esac
+
+case "$(uname -m)" in
+x86_64 | amd64) TARGET_PLATFORM="linux/amd64" ;;
+aarch64 | arm64) TARGET_PLATFORM="linux/arm64" ;;
+*)
+    echo "Unsupported architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
+echo "Building with Python ${PYTHON_VERSION}, CUDA ${CUDA_VERSION}, platform ${TARGET_PLATFORM}"
+
 docker build \
-    --build-arg CUDA_VERSION=$CUDA_VERSION \
-    --build-arg LITE=$LITE \
-    --build-arg TARGETPLATFORM="$TARGETPLATFORM" \
-    --build-arg TORCH_BASE=$TORCH_BASE \
-    --build-arg WORKFLOW=$WORKFLOW \
-    -t "${USER}/gpt-sovits:local" \
+    --build-arg "CUDA_VERSION=${CUDA_VERSION}" \
+    --build-arg "PYTHON_VERSION=${PYTHON_VERSION}" \
+    --build-arg "TARGETPLATFORM=${TARGET_PLATFORM}" \
+    --build-arg "WORKFLOW=true" \
+    --tag "gpt-sovits-api:local" \
     .

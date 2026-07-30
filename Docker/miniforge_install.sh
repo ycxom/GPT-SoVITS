@@ -55,11 +55,13 @@ source "$HOME/.bashrc"
 
 "$HOME/conda/bin/conda" update --all -y
 
-"$HOME/conda/bin/conda" install python=3.12 -y
+"$HOME/conda/bin/conda" install python="${PYTHON_VERSION:-3.12}" -y
 
 "$HOME/conda/bin/conda" install gcc=11 gxx ffmpeg cmake make unzip $SYSROOT_PKG "libstdcxx-ng>=11" -y
 
-if [ "$CUDA_VERSION" = "12.8" ]; then
+if [ "$CUDA_VERSION" = "13.0" ]; then
+    "$HOME/conda/bin/pip" install torch==2.9.1 torchaudio==2.9.1 torchcodec --no-cache-dir --index-url https://download.pytorch.org/whl/cu130
+elif [ "$CUDA_VERSION" = "12.8" ]; then
     "$HOME/conda/bin/pip" install torch torchcodec --no-cache-dir --index-url https://download.pytorch.org/whl/cu128
     "$HOME/conda/bin/conda" install cuda-nvcc=12.8 -y
 elif [ "$CUDA_VERSION" = "12.6" ]; then
@@ -70,7 +72,6 @@ fi
 export PATH="$HOME/conda/bin:$PATH"
 
 "$HOME/conda/bin/pip" install psutil ninja packaging wheel "setuptools>=42" einops
-"$HOME/conda/bin/pip" install flash-attn -i https://xxxxrt666.github.io/PIP-Index/ --no-build-isolation
 "$HOME/conda/bin/pip" cache purge
 
 rm $LOG_PATH

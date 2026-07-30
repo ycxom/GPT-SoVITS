@@ -1,60 +1,62 @@
-ARG CUDA_VERSION=12.6
-ARG TORCH_BASE=full
-
-FROM xxxxrt666/torch-base:cu${CUDA_VERSION}-${TORCH_BASE}
+FROM debian:13
 
 LABEL maintainer="XXXXRT"
-LABEL version="V2 Pro"
-LABEL description="Docker image for GPT-SoVITS"
+LABEL description="GPT-SoVITS API server on Debian 13"
 
-ARG CUDA_VERSION=12.6
+ARG PYTHON_VERSION=3.12
+ARG CUDA_VERSION=12.8
+ARG TARGETPLATFORM=linux/amd64
+ARG WORKFLOW=true
 
-ENV CUDA_VERSION=${CUDA_VERSION}
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/workspace/GPT-SoVITS \
+    CUDA_VERSION=${CUDA_VERSION} \
+    TARGETPLATFORM=${TARGETPLATFORM} \
+    WORKFLOW=${WORKFLOW} \
+    PATH=/root/conda/bin:${PATH}
 
-SHELL ["/bin/bash", "-c"]
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+      build-essential \
+      ca-certificates \
+      cmake \
+      curl \
+      ffmpeg \
+      git \
+      libgomp1 \
+      libsndfile1 \
+      make \
+      unzip \
+      wget \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace/GPT-SoVITS
 
-COPY Docker /workspace/GPT-SoVITS/Docker/
+COPY Docker/miniforge_install.sh Docker/miniforge_install.sh
 
-ARG LITE=false
-ENV LITE=${LITE}
+RUN bash Docker/miniforge_install.sh
 
-ARG WORKFLOW=false
-ENV WORKFLOW=${WORKFLOW}
-
-ARG TARGETPLATFORM
-ENV TARGETPLATFORM=${TARGETPLATFORM}
-
-COPY extra-req.txt /workspace/GPT-SoVITS/
-
-COPY requirements.txt /workspace/GPT-SoVITS/
-
-COPY install.sh /workspace/GPT-SoVITS/
+COPY extra-req.txt requirements.txt install.sh ./
+COPY Docker/install_wrapper.sh Docker/install_wrapper.sh
 
 RUN bash Docker/install_wrapper.sh
 
-EXPOSE 9871 9872 9873 9874 9880
+COPY . .
 
-ENV PYTHONPATH="/workspace/GPT-SoVITS"
+RUN rm -rf \
+      GPT_SoVITS/pretrained_models \
+      GPT_SoVITS/text/G2PWModel \
+      tools/asr/models \
+      tools/uvr5/uvr5_weights \
+    && ln -s /workspace/models/pretrained_models GPT_SoVITS/pretrained_models \
+    && ln -s /workspace/models/G2PWModel GPT_SoVITS/text/G2PWModel \
+    && ln -s /workspace/models/asr_models tools/asr/models \
+    && ln -s /workspace/models/uvr5_weights tools/uvr5/uvr5_weights
 
-RUN conda init bash && echo "conda activate base" >> ~/.bashrc
+EXPOSE 9880
 
-WORKDIR /workspace
-
-RUN rm -rf /workspace/GPT-SoVITS
-
-WORKDIR /workspace/GPT-SoVITS
-
-COPY . /workspace/GPT-SoVITS
-
-CMD ["/bin/bash", "-c", "\
-  rm -rf /workspace/GPT-SoVITS/GPT_SoVITS/pretrained_models && \
-  rm -rf /workspace/GPT-SoVITS/GPT_SoVITS/text/G2PWModel && \
-  rm -rf /workspace/GPT-SoVITS/tools/asr/models && \
-  rm -rf /workspace/GPT-SoVITS/tools/uvr5/uvr5_weights && \
-  ln -s /workspace/models/pretrained_models /workspace/GPT-SoVITS/GPT_SoVITS/pretrained_models && \
-  ln -s /workspace/models/G2PWModel /workspace/GPT-SoVITS/GPT_SoVITS/text/G2PWModel && \
-  ln -s /workspace/models/asr_models /workspace/GPT-SoVITS/tools/asr/models && \
-  ln -s /workspace/models/uvr5_weights /workspace/GPT-SoVITS/tools/uvr5/uvr5_weights && \
-  exec bash"]
+CMD ["python", "api_server.py", "--bind_addr", "0.0.0.0", "--port", "9880"]

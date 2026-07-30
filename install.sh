@@ -77,7 +77,7 @@ print_help() {
     echo "Usage: bash install.sh [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --device   CU126|CU128|ROCM|MPS|CPU    Specify the Device (REQUIRED)"
+    echo "  --device   CU126|CU128|CU130|ROCM|MPS|CPU    Specify the Device (REQUIRED)"
     echo "  --source   HF|HF-Mirror|ModelScope     Specify the model source (REQUIRED)"
     echo "  --download-uvr5                        Enable downloading the UVR5 model"
     echo "  -h, --help                             Show this help message and exit"
@@ -125,6 +125,10 @@ while [[ $# -gt 0 ]]; do
             CUDA=128
             USE_CUDA=true
             ;;
+        CU130)
+            CUDA=130
+            USE_CUDA=true
+            ;;
         ROCM)
             USE_ROCM=true
             ;;
@@ -136,7 +140,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo -e "${ERROR}Error: Invalid Device: $2"
-            echo -e "${ERROR}Choose From: [CU126, CU128, ROCM, MPS, CPU]"
+            echo -e "${ERROR}Choose From: [CU126, CU128, CU130, ROCM, MPS, CPU]"
             exit 1
             ;;
         esac
@@ -324,7 +328,10 @@ if [ "$USE_ROCM" = true ] && [ "$WORKFLOW" = false ]; then
 fi
 
 if [ "$USE_CUDA" = true ] && [ "$WORKFLOW" = false ]; then
-    if [ "$CUDA" = 128 ]; then
+    if [ "$CUDA" = 130 ]; then
+        echo -e "${INFO}Installing PyTorch 2.9.1 For CUDA 13.0..."
+        run_pip_quiet torch==2.9.1 torchaudio==2.9.1 torchcodec --index-url "https://download.pytorch.org/whl/cu130"
+    elif [ "$CUDA" = 128 ]; then
         echo -e "${INFO}Installing PyTorch For CUDA 12.8..."
         run_pip_quiet torch torchcodec --index-url "https://download.pytorch.org/whl/cu128"
     elif [ "$CUDA" = 126 ]; then
