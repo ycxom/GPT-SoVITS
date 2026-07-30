@@ -48,7 +48,12 @@ run_pip_quiet() {
 }
 
 run_wget_quiet() {
-    if wget --tries=25 --wait=5 --read-timeout=40 -q --show-progress "$@" 2>&1; then
+    local progress_args=(-q --show-progress)
+    if [ "$WORKFLOW" = "true" ]; then
+        progress_args=(-nv)
+    fi
+
+    if wget --tries=25 --wait=5 --read-timeout=40 "${progress_args[@]}" "$@" 2>&1; then
         if [ "$WORKFLOW" = "false" ]; then
             tput cuu1 && tput el
         fi
@@ -263,6 +268,8 @@ if [ ! -d "GPT_SoVITS/pretrained_models/sv" ]; then
     rm -rf pretrained_models.zip
     run_wget_quiet "$PRETRINED_URL"
 
+    ls -lh pretrained_models.zip
+    unzip -tq pretrained_models.zip
     unzip -q -o pretrained_models.zip -d GPT_SoVITS
     rm -rf pretrained_models.zip
     echo -e "${SUCCESS}Pretrained Models Downloaded"
@@ -276,6 +283,8 @@ if [ ! -d "GPT_SoVITS/text/G2PWModel" ]; then
     rm -rf G2PWModel.zip
     run_wget_quiet "$G2PW_URL"
 
+    ls -lh G2PWModel.zip
+    unzip -tq G2PWModel.zip
     unzip -q -o G2PWModel.zip -d GPT_SoVITS/text
     rm -rf G2PWModel.zip
     echo -e "${SUCCESS}G2PWModel Downloaded"

@@ -19,6 +19,12 @@ mkdir -p GPT_SoVITS
 
 mkdir -p GPT_SoVITS/text
 
+mkdir -p \
+    /workspace/models/pretrained_models \
+    /workspace/models/G2PWModel \
+    /workspace/models/asr_models \
+    /workspace/models/uvr5_weights
+
 ln -s /workspace/models/pretrained_models /workspace/GPT-SoVITS/GPT_SoVITS/pretrained_models
 
 ln -s /workspace/models/G2PWModel /workspace/GPT-SoVITS/GPT_SoVITS/text/G2PWModel
