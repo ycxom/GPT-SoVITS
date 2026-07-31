@@ -51,12 +51,15 @@ switch ($architecture) {
 
 Write-Host "Building with Python $PythonVersion, CUDA $CudaVersion, platform $targetPlatform, source $DownloadSource"
 
+$sourceRevision = [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
+
 docker build `
     --build-arg "CUDA_VERSION=$CudaVersion" `
     --build-arg "PYTHON_VERSION=$PythonVersion" `
     --build-arg "TARGETPLATFORM=$targetPlatform" `
     --build-arg "WORKFLOW=true" `
     --build-arg "DOWNLOAD_SOURCE=$DownloadSource" `
+    --build-arg "SOURCE_REVISION=$sourceRevision" `
     --tag "gpt-sovits-api:local" `
     .
 

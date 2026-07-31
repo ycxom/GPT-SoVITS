@@ -54,9 +54,14 @@ COPY Docker/install_wrapper.sh Docker/install_wrapper.sh
 
 RUN bash Docker/install_wrapper.sh
 
+ARG SOURCE_REVISION=unknown
+
+RUN echo "${SOURCE_REVISION}" > /tmp/image-source-revision
+
 COPY . .
 
-RUN rm -rf \
+RUN mv /tmp/image-source-revision /workspace/GPT-SoVITS/.image-source-revision \
+    && rm -rf \
       GPT_SoVITS/pretrained_models \
       GPT_SoVITS/text/G2PWModel \
       tools/asr/models \

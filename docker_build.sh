@@ -123,11 +123,14 @@ esac
 
 echo "Building with Python ${PYTHON_VERSION}, CUDA ${CUDA_VERSION}, platform ${TARGET_PLATFORM}, source ${DOWNLOAD_SOURCE}"
 
+SOURCE_REVISION="$(date -u +%Y%m%d%H%M%S)"
+
 docker build \
     --build-arg "CUDA_VERSION=${CUDA_VERSION}" \
     --build-arg "PYTHON_VERSION=${PYTHON_VERSION}" \
     --build-arg "TARGETPLATFORM=${TARGET_PLATFORM}" \
     --build-arg "WORKFLOW=true" \
     --build-arg "DOWNLOAD_SOURCE=${DOWNLOAD_SOURCE}" \
+    --build-arg "SOURCE_REVISION=${SOURCE_REVISION}" \
     --tag "gpt-sovits-api:local" \
     .
