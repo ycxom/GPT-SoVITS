@@ -60,7 +60,8 @@ RUN echo "${SOURCE_REVISION}" > /tmp/image-source-revision
 
 COPY . .
 
-RUN mv /tmp/image-source-revision /workspace/GPT-SoVITS/.image-source-revision \
+RUN bash Docker/ensure_g2pw.sh \
+    && mv /tmp/image-source-revision /workspace/GPT-SoVITS/.image-source-revision \
     && rm -rf \
       GPT_SoVITS/pretrained_models \
       GPT_SoVITS/text/G2PWModel \
