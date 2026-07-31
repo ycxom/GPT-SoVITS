@@ -73,9 +73,13 @@ if [ "$CUDA_VERSION" = "13.0" ]; then
     "$HOME/conda/bin/pip" install \
         torch==2.9.1 \
         torchaudio==2.9.1 \
-        torchcodec==0.9.1 \
         --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cu130
+    "$HOME/conda/bin/pip" install \
+        torchcodec==0.9.1 \
+        --no-cache-dir \
+        --no-deps \
+        --index-url https://download.pytorch.org/whl/cpu
 elif [ "$CUDA_VERSION" = "12.8" ]; then
     "$HOME/conda/bin/pip" install torch torchcodec --no-cache-dir --index-url https://download.pytorch.org/whl/cu128
     "$HOME/conda/bin/conda" install cuda-nvcc=12.8 -y

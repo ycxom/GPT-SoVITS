@@ -339,7 +339,8 @@ fi
 if [ "$USE_CUDA" = true ] && [ "$WORKFLOW" = false ]; then
     if [ "$CUDA" = 130 ]; then
         echo -e "${INFO}Installing PyTorch 2.9.1 For CUDA 13.0..."
-        run_pip_quiet torch==2.9.1 torchaudio==2.9.1 torchcodec==0.9.1 --index-url "https://download.pytorch.org/whl/cu130"
+        run_pip_quiet torch==2.9.1 torchaudio==2.9.1 --index-url "https://download.pytorch.org/whl/cu130"
+        run_pip_quiet torchcodec==0.9.1 --no-deps --index-url "https://download.pytorch.org/whl/cpu"
     elif [ "$CUDA" = 128 ]; then
         echo -e "${INFO}Installing PyTorch For CUDA 12.8..."
         run_pip_quiet torch torchcodec --index-url "https://download.pytorch.org/whl/cu128"
