@@ -16,7 +16,8 @@ services:
       - ./models:/workspace/GPT-SoVITS/models
       - ./api_config.yaml:/workspace/GPT-SoVITS/api_config.yaml:ro
     environment:
-      is_half: "${IS_HALF:-true}"
+      TTS_DEVICE: "${TTS_DEVICE:-auto}"
+      IS_HALF: "${IS_HALF:-auto}"
     shm_size: "16g"
     restart: unless-stopped
     gpus: all

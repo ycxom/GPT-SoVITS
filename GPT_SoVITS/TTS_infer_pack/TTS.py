@@ -319,12 +319,27 @@ class TTS_Config:
         self.configs: dict = configs_.get("custom", configs_["v2"])
         self.default_configs = deepcopy(configs_)
 
-        self.device = self.configs.get("device", torch.device("cpu"))
+        configured_device = self.configs.get("device", torch.device("cpu"))
+        device_override = os.environ.get("TTS_DEVICE", "").strip()
+        if device_override.lower() == "auto":
+            self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        elif device_override:
+            self.device = torch.device(device_override)
+        else:
+            self.device = configured_device
+
         if "cuda" in str(self.device) and not torch.cuda.is_available():
             print("Warning: CUDA is not available, set device to CPU.")
             self.device = torch.device("cpu")
 
-        self.is_half = self.configs.get("is_half", False)
+        half_override = os.environ.get("IS_HALF", "").strip().lower()
+        if half_override == "auto":
+            self.is_half = str(self.device) != "cpu"
+        elif half_override:
+            self.is_half = half_override in {"1", "true", "yes", "on"}
+        else:
+            self.is_half = self.configs.get("is_half", False)
+
         if str(self.device) == "cpu" and self.is_half:
             print(f"Warning: Half precision is not supported on CPU, set is_half to False.")
             self.is_half = False
