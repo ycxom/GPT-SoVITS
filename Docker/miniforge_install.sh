@@ -70,7 +70,12 @@ fi
 "$HOME/conda/bin/conda" install gcc=11 gxx ffmpeg cmake make unzip $SYSROOT_PKG "libstdcxx-ng>=11" -y
 
 if [ "$CUDA_VERSION" = "13.0" ]; then
-    "$HOME/conda/bin/pip" install torch==2.9.1 torchaudio==2.9.1 torchcodec --no-cache-dir --index-url https://download.pytorch.org/whl/cu130
+    "$HOME/conda/bin/pip" install \
+        torch==2.9.1 \
+        torchaudio==2.9.1 \
+        torchcodec==0.9.1 \
+        --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cu130
 elif [ "$CUDA_VERSION" = "12.8" ]; then
     "$HOME/conda/bin/pip" install torch torchcodec --no-cache-dir --index-url https://download.pytorch.org/whl/cu128
     "$HOME/conda/bin/conda" install cuda-nvcc=12.8 -y
@@ -78,6 +83,9 @@ elif [ "$CUDA_VERSION" = "12.6" ]; then
     "$HOME/conda/bin/pip" install torch torchcodec --no-cache-dir --index-url https://download.pytorch.org/whl/cu126
     "$HOME/conda/bin/conda" install cuda-nvcc=12.6 -y
 fi
+
+"$HOME/conda/bin/python" -c \
+    "from importlib.metadata import version; import torch, torchcodec; print(f'PyTorch {torch.__version__}, TorchCodec {version(\"torchcodec\")}')"
 
 export PATH="$HOME/conda/bin:$PATH"
 
