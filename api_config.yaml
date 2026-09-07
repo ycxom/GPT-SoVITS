@@ -31,7 +31,7 @@ default_models:
   language_defaults:
     zh: "蔚蓝档案-中文-心奈"
     ja: "蔚蓝档案-日语-伊吹"
-    en: "蔚蓝档案-英语-test"
+    en: "明日方舟-英语-古米"
     ko: "蔚蓝档案-韩语-test"
     yue: "蔚蓝档案-粤语-test"
 
@@ -112,21 +112,21 @@ security_features:
   # IP白名单（永远不会被加入黑名单）
   # 本地IP默认在白名单中，无需配置
   ip_whitelist:
-    - 127.0.0.1               # 本地IPv4
-    - ::1                     # 本地IPv6
-    - localhost               # 本地主机名
-    # - 192.168.1.100         # 可以添加其他信任的IP
+  - 127.0.0.1 # 本地IPv4
+  - ::1 # 本地IPv6
+  - localhost # 本地主机名
+  # - 192.168.1.100         # 可以添加其他信任的IP
 
   # 白名单路径（跳过安全检测以提高性能）
   # 这些路径只检查IP黑名单，不进行恶意模式检测
   whitelist_paths:
-    - /tts                    # TTS合成API（文本内容各异，不需要检测）
-    - /stats                  # 统计面板
-    - /security               # 安全面板
-    - /control                # 控制API
-    - /set_gpt_weights        # 模型切换
-    - /set_sovits_weights     # 模型切换
-    - /set_refer_audio        # 参考音频
+  - /tts # TTS合成API（文本内容各异，不需要检测）
+  - /stats # 统计面板
+  - /security # 安全面板
+  - /control # 控制API
+  - /set_gpt_weights # 模型切换
+  - /set_sovits_weights # 模型切换
+  - /set_refer_audio # 参考音频
 
 # 监控和告警
 monitoring:
