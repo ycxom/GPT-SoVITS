@@ -547,6 +547,12 @@ def count_cjk_chars(text: str) -> int:
     )
     return len(cjk_pattern.findall(text))
 
+def count_effective_chars(text: str) -> int:
+    """统计有效字符数（去除空白符），中英文统一计数，用于限流"""
+    if not text:
+        return 0
+    return len(re.sub(r'\s+', '', text))
+
 def check_ip_rate_limit(client_ip: str, text: str, limits: dict = None) -> tuple:
 
     if not is_ip_rate_limit_enabled():
@@ -576,7 +582,8 @@ def check_ip_rate_limit(client_ip: str, text: str, limits: dict = None) -> tuple
         del IP_BAN_LIST[client_ip]
         IP_VIOLATION_TIMESTAMPS.pop(client_ip, None)
 
-    cjk_count = count_cjk_chars(text)
+    # 字符限额统一统计所有有效字符（含英文），避免纯拉丁文本绕过限制
+    cjk_count = count_effective_chars(text)
 
     violation_reason = None
 
@@ -846,7 +853,8 @@ def get_model_for_user(api_key: str, text_lang: str, model_name: str = "", text:
         "redirected": False,
         "original_model": model_name,
         "final_model": "",
-        "reason": ""
+        "reason": "",
+        "reason_code": ""
     }
     
     detected_lang = text_lang  # 默认使用原始语言
@@ -883,7 +891,8 @@ def get_model_for_user(api_key: str, text_lang: str, model_name: str = "", text:
             redirect_info.update({
                 "redirected": True,
                 "final_model": final_model,
-                "reason": f"模型 '{model_name}' 不在用户 {api_key[:8]}... 的授权列表中，已重定向到默认模型 '{final_model}'"
+                "reason": f"模型 '{model_name}' 不在用户 {api_key[:8]}... 的授权列表中，已重定向到默认模型 '{final_model}'",
+                "reason_code": "model_not_authorized"
             })
             
             # 记录重定向日志
@@ -1160,6 +1169,36 @@ def check_params_extended(req: dict):
     return None
 
 
+def release_request_slot(request_id: str):
+    """释放请求处理标记（幂等），所有退出路径都必须调用，否则同 ID 请求将永远返回 409"""
+    if request_id in PROCESSING_REQUESTS:
+        del PROCESSING_REQUESTS[request_id]
+        if should_log('request_status'):
+            print(f"✅ 请求处理完成 - ID: {request_id[:8] if len(request_id) > 8 else request_id}...")
+
+
+def _record_tts_stats(stats_manager, req: dict, api_key: str, model_name: str, text: str,
+                       start_time: float, media_type: str, success: bool,
+                       error_message=None, tts_time=None):
+    """统一的请求统计记录，消除各分支中的重复调用"""
+    stats_manager.record_request(
+        api_key=api_key,
+        model_name=model_name,
+        text_length=len(text),
+        processing_time=time.time() - start_time,
+        success=success,
+        error_message=error_message,
+        client_ip=req.get("client_ip", "unknown"),
+        text_lang=req.get("text_lang", ""),
+        media_type=media_type,
+        text_preview=text[:100] if len(text) > 100 else text,
+        text_full=text,
+        tts_time=tts_time,
+        ref_audio_path=req.get("ref_audio_path", ""),
+        prompt_text=req.get("prompt_text", "")
+    )
+
+
 async def tts_handle(req: dict):
     """
     Text to speech handler with enterprise features.
@@ -1229,16 +1268,21 @@ async def tts_handle(req: dict):
 
     is_banned = check_ip_ban(client_ip)
     if is_banned:
+        release_request_slot(request_id)
         return JSONResponse(
             status_code=429,
             content={"message": "IP is banned due to rate limit violation"}
         )
 
     api_key_early = req.get("api_key", "")
-    ip_limits = get_ip_rate_limit_config(api_key_early)
+    # 仅当密钥通过认证时才使用其自定义限流配置，防止用无效或被禁用的密钥套用宽松限额
+    early_auth = authenticate_api_key(api_key_early)
+    limits_lookup_key = api_key_early if (early_auth.get('valid') and early_auth.get('key') not in ('default', 'anonymous')) else ""
+    ip_limits = get_ip_rate_limit_config(limits_lookup_key)
 
     allowed, limit_reason = check_ip_rate_limit(client_ip, req.get("text", ""), ip_limits)
     if not allowed:
+        release_request_slot(request_id)
         return JSONResponse(
             status_code=429,
             content={"message": limit_reason}
@@ -1253,49 +1297,23 @@ async def tts_handle(req: dict):
     if not user_info['valid']:
         error_message = user_info.get('error', 'Authentication failed')
         text = req.get("text", "")
-        text_preview = text[:100] if len(text) > 100 else text
-        text_full = text
-        
+
         # 记录失败的认证尝试
-        stats_manager.record_request(
-            api_key=api_key or "anonymous",
-            model_name=req.get("model_name", ""),
-            text_length=len(text),
-            processing_time=time.time() - start_time,
-            success=False,
-            error_message=error_message,
-            client_ip=req.get("client_ip", "unknown"),
-            text_lang=req.get("text_lang", ""),
-            media_type=req.get("media_type", "wav"),
-            text_preview=text_preview,
-            text_full=text_full,
-            ref_audio_path=req.get("ref_audio_path", ""),
-            prompt_text=req.get("prompt_text", "")
-        )
+        _record_tts_stats(stats_manager, req, api_key or "anonymous", req.get("model_name", ""),
+                          text, start_time, req.get("media_type", "wav"), False,
+                          error_message=error_message)
+        release_request_slot(request_id)
         return JSONResponse(status_code=401, content={"message": error_message})
     
     # 2. 速率限制检查
     if not check_rate_limit(user_info['key']):
         text = req.get("text", "")
-        text_preview = text[:100] if len(text) > 100 else text
-        text_full = text
-        
+
         # 记录被限流的请求
-        stats_manager.record_request(
-            api_key=user_info['key'],
-            model_name=req.get("model_name", ""),
-            text_length=len(text),
-            processing_time=time.time() - start_time,
-            success=False,
-            error_message="Rate limit exceeded",
-            client_ip=req.get("client_ip", "unknown"),
-            text_lang=req.get("text_lang", ""),
-            media_type=req.get("media_type", "wav"),
-            text_preview=text_preview,
-            text_full=text_full,
-            ref_audio_path=req.get("ref_audio_path", ""),
-            prompt_text=req.get("prompt_text", "")
-        )
+        _record_tts_stats(stats_manager, req, user_info['key'], req.get("model_name", ""),
+                          text, start_time, req.get("media_type", "wav"), False,
+                          error_message="Rate limit exceeded")
+        release_request_slot(request_id)
         return JSONResponse(status_code=429, content={"message": "Rate limit exceeded"})
     
 
@@ -1345,7 +1363,8 @@ async def tts_handle(req: dict):
                         "redirected": True,
                         "original_model": model_name,
                         "final_model": suggested_model,
-                        "reason": f"检测到文本语言({detected_lang})与原模型语言不匹配，已自动重定向到合适的{detected_lang}模型"
+                        "reason": f"检测到文本语言({detected_lang})与原模型语言不匹配，已自动重定向到合适的{detected_lang}模型",
+                        "reason_code": "language_mismatch_auto_corrected"
                     })
                 else:
                     if should_log('api_details'):
@@ -1412,47 +1431,35 @@ async def tts_handle(req: dict):
     check_res = check_params_extended(req)
     if check_res is not None:
         text = req.get("text", "")
-        text_preview = text[:100] if len(text) > 100 else text
-        text_full = text
-        
+
         # 记录参数验证失败
-        stats_manager.record_request(
-            api_key=user_info['key'],
-            model_name=model_name,
-            text_length=len(text),
-            processing_time=time.time() - start_time,
-            success=False,
-            error_message="Parameter validation failed",
-            client_ip=req.get("client_ip", "unknown"),
-            text_lang=req.get("text_lang", ""),
-            media_type=media_type,
-            text_preview=text_preview,
-            text_full=text_full,
-            ref_audio_path=req.get("ref_audio_path", ""),
-            prompt_text=req.get("prompt_text", "")
-        )
-        
+        _record_tts_stats(stats_manager, req, user_info['key'], model_name, text,
+                          start_time, media_type, False,
+                          error_message="Parameter validation failed")
+
         # 如果是重定向情况且参数验证失败，仍然需要添加重定向头信息
         if redirect_info["redirected"]:
             # 获取原始响应的内容和状态码
             status_code = check_res.status_code
             response_body = check_res.body.decode('utf-8') if isinstance(check_res.body, bytes) else str(check_res.body)
-            
+
             # 创建带有重定向头的新Response对象（使用ASCII安全编码）
             headers = {
                 "X-Model-Redirected": "true",
                 "X-Original-Model": "unauthorized_model",
                 "X-Final-Model": safe_header_value(redirect_info["final_model"]),
-                "X-Redirect-Reason": "model_not_authorized"
+                "X-Redirect-Reason": redirect_info.get("reason_code") or "redirected"
             }
-            
+
+            release_request_slot(request_id)
             return Response(
                 content=response_body,
                 status_code=status_code,
                 headers=headers,
                 media_type="application/json"
             )
-        
+
+        release_request_slot(request_id)
         return check_res
 
     # 更新 streaming_mode 状态用于后续判断
@@ -1493,82 +1500,46 @@ async def tts_handle(req: dict):
                 response.headers["X-Model-Redirected"] = "true"
                 response.headers["X-Original-Model"] = safe_header_value(redirect_info["original_model"])
                 response.headers["X-Final-Model"] = safe_header_value(redirect_info["final_model"])
-                response.headers["X-Redirect-Reason"] = "language_mismatch_auto_corrected"
+                response.headers["X-Redirect-Reason"] = redirect_info.get("reason_code") or "redirected"
             elif isinstance(response, Response):
                 response.headers["X-Model-Redirected"] = "true"
                 response.headers["X-Original-Model"] = safe_header_value(redirect_info["original_model"])
                 response.headers["X-Final-Model"] = safe_header_value(redirect_info["final_model"])
-                response.headers["X-Redirect-Reason"] = "language_mismatch_auto_corrected"
+                response.headers["X-Redirect-Reason"] = redirect_info.get("reason_code") or "redirected"
         
         # 6. 记录成功的请求统计（在完成所有处理后记录）
         tts_time = time.time() - tts_start_time
         total_time = time.time() - start_time
         text = req.get("text", "")
-        text_preview = text[:100] if len(text) > 100 else text
-        text_full = text
-        
-        stats_manager.record_request(
-            api_key=user_info['key'],
-            model_name=model_name,
-            text_length=len(text),
-            processing_time=total_time,
-            success=True,
-            error_message=None,
-            client_ip=req.get("client_ip", "unknown"),
-            text_lang=req.get("text_lang", ""),
-            media_type=media_type,
-            text_preview=text_preview,
-            text_full=text_full,
-            tts_time=tts_time,
-            ref_audio_path=req.get("ref_audio_path", ""),
-            prompt_text=req.get("prompt_text", "")
-        )
-        
+
+        _record_tts_stats(stats_manager, req, user_info['key'], model_name, text,
+                          start_time, media_type, True, tts_time=tts_time)
+
         if should_log('tts_synthesis'):
             print(f"⏱️  处理时间 - 总计: {total_time:.2f}秒, TTS合成: {tts_time:.2f}秒")
-        
+
         # 清理处理标记
-        if request_id in PROCESSING_REQUESTS:
-            del PROCESSING_REQUESTS[request_id]
-            if should_log('request_status'):
-                print(f"✅ 请求处理完成 - ID: {request_id[:8]}...")
-        
+        release_request_slot(request_id)
+
         return response
         
     except Exception as e:
         # 8. 记录失败的请求统计
-        processing_time = time.time() - start_time
         text = req.get("text", "")
-        text_preview = text[:100] if len(text) > 100 else text
-        text_full = text  # 保存完整文本
-        
-        stats_manager.record_request(
-            api_key=user_info['key'],
-            model_name=model_name,
-            text_length=len(text),
-            processing_time=processing_time,
-            success=False,
-            error_message=str(e),
-            client_ip=req.get("client_ip", "unknown"),
-            text_lang=req.get("text_lang", ""),
-            media_type=media_type,
-            text_preview=text_preview,
-            text_full=text_full,
-            ref_audio_path=req.get("ref_audio_path", ""),
-            prompt_text=req.get("prompt_text", "")
-        )
-        
+
+        _record_tts_stats(stats_manager, req, user_info['key'], model_name, text,
+                          start_time, media_type, False, error_message=str(e))
+
         # 清理处理标记
-        if request_id in PROCESSING_REQUESTS:
-            del PROCESSING_REQUESTS[request_id]
-        
+        release_request_slot(request_id)
+
         # 如果是重定向情况，在异常响应中也添加重定向头信息
         if redirect_info["redirected"]:
             headers = {
                 "X-Model-Redirected": "true",
                 "X-Original-Model": "unauthorized_model",
                 "X-Final-Model": safe_header_value(redirect_info["final_model"]),
-                "X-Redirect-Reason": "model_not_authorized"
+                "X-Redirect-Reason": redirect_info.get("reason_code") or "redirected"
             }
             return JSONResponse(
                 status_code=400,
@@ -1624,6 +1595,9 @@ async def tts_get_endpoint(
     # 企业级功能参数
     api_key: str = "",
 ):
+    # 支持 X-API-Key 请求头传递密钥，避免密钥出现在 URL 中被访问日志记录
+    api_key = api_key or request.headers.get("X-API-Key", "")
+
     # 如果 text_lang 为空，自动设置为智能语言识别模式
     if not text_lang:
         text_lang = "auto"
@@ -1675,9 +1649,13 @@ async def tts_get_endpoint(
 
 @APP.post("/tts")
 async def tts_post_endpoint(body: TTS_Request, request: Request):
-    req = body.dict()
+    req = body.model_dump()
     client_ip = get_real_ip(request)
     req["client_ip"] = client_ip
+
+    # 支持 X-API-Key 请求头传递密钥，避免密钥出现在 URL 中被访问日志记录
+    if not req.get("api_key"):
+        req["api_key"] = request.headers.get("X-API-Key", "")
     
     # 生成请求ID
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
