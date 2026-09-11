@@ -21,18 +21,46 @@ WORKFLOW=${WORKFLOW:-"false"}
 TARGETPLATFORM=${TARGETPLATFORM:-"linux/amd64"}
 
 if [ "$WORKFLOW" = "true" ]; then
-    WGET_CMD=(wget -nv --tries=25 --wait=5 --read-timeout=40 --retry-on-http-error=404)
+    WGET_CMD=(wget -nv --tries=5 --wait=3 --timeout=20 --read-timeout=20 --retry-on-http-error=404)
 else
-    WGET_CMD=(wget --tries=25 --wait=5 --read-timeout=40 --retry-on-http-error=404)
+    WGET_CMD=(wget --tries=5 --wait=3 --timeout=20 --read-timeout=20 --retry-on-http-error=404)
 fi
 
 if [ "$TARGETPLATFORM" = "linux/amd64" ]; then
-    "${WGET_CMD[@]}" -O Miniforge.sh "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
     SYSROOT_PKG="sysroot_linux-64>=2.28"
 elif [ "$TARGETPLATFORM" = "linux/arm64" ]; then
-    "${WGET_CMD[@]}" -O Miniforge.sh "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
     SYSROOT_PKG="sysroot_linux-aarch64>=2.28"
 else
+    exit 1
+fi
+
+MINIFORGE_FILENAME="Miniforge3-$(uname)-$(uname -m).sh"
+
+MINIFORGE_URLS=()
+if [ -n "${MINIFORGE_BASE_URL:-}" ]; then
+    MINIFORGE_URLS+=("${MINIFORGE_BASE_URL}/${MINIFORGE_FILENAME}")
+fi
+MINIFORGE_URLS+=(
+    "https://mirrors.tuna.tsinghua.edu.cn/github-release/conda-forge/miniforge/LatestRelease/${MINIFORGE_FILENAME}"
+    "https://mirrors.ustc.edu.cn/github-release/conda-forge/miniforge/LatestRelease/${MINIFORGE_FILENAME}"
+    "https://github.com/conda-forge/miniforge/releases/latest/download/${MINIFORGE_FILENAME}"
+)
+
+mapfile -t MINIFORGE_URLS < <(printf '%s\n' "${MINIFORGE_URLS[@]}" | awk '!seen[$0]++')
+
+DOWNLOAD_OK="false"
+for url in "${MINIFORGE_URLS[@]}"; do
+    echo "Trying to download Miniforge from: ${url}"
+    if "${WGET_CMD[@]}" -O Miniforge.sh "$url"; then
+        DOWNLOAD_OK="true"
+        break
+    fi
+    echo "Download failed from ${url}, trying next source..."
+    rm -f Miniforge.sh
+done
+
+if [ "$DOWNLOAD_OK" != "true" ]; then
+    echo "Failed to download Miniforge from all sources." >&2
     exit 1
 fi
 

@@ -45,24 +45,28 @@ auto)
     conda_host="$(select_fastest conda.anaconda.org mirrors.tuna.tsinghua.edu.cn)"
     pypi_host="$(select_fastest pypi.org pypi.tuna.tsinghua.edu.cn)"
     model_host="$(select_fastest huggingface.co hf-mirror.com www.modelscope.cn)"
+    github_host="$(select_fastest github.com mirrors.tuna.tsinghua.edu.cn mirrors.ustc.edu.cn)"
     ;;
 official)
     apt_host="deb.debian.org"
     conda_host="conda.anaconda.org"
     pypi_host="pypi.org"
     model_host="huggingface.co"
+    github_host="github.com"
     ;;
 ustc)
     apt_host="mirrors.ustc.edu.cn"
     conda_host="conda.anaconda.org"
     pypi_host="pypi.org"
     model_host="hf-mirror.com"
+    github_host="mirrors.ustc.edu.cn"
     ;;
 tuna)
     apt_host="mirrors.tuna.tsinghua.edu.cn"
     conda_host="mirrors.tuna.tsinghua.edu.cn"
     pypi_host="pypi.tuna.tsinghua.edu.cn"
     model_host="hf-mirror.com"
+    github_host="mirrors.tuna.tsinghua.edu.cn"
     ;;
 *)
     echo "Unknown DOWNLOAD_SOURCE: ${SOURCE_MODE}" >&2
@@ -93,7 +97,14 @@ www.modelscope.cn) model_source="ModelScope" ;;
 *) model_source="HF" ;;
 esac
 
+case "$github_host" in
+mirrors.tuna.tsinghua.edu.cn) miniforge_base_url="https://mirrors.tuna.tsinghua.edu.cn/github-release/conda-forge/miniforge/LatestRelease" ;;
+mirrors.ustc.edu.cn) miniforge_base_url="https://mirrors.ustc.edu.cn/github-release/conda-forge/miniforge/LatestRelease" ;;
+*) miniforge_base_url="https://github.com/conda-forge/miniforge/releases/latest/download" ;;
+esac
+
 echo "APT_MIRROR=${apt_mirror}"
 echo "CONDA_MIRROR=${conda_mirror}"
 echo "PIP_INDEX_URL=${pip_index_url}"
 echo "MODEL_SOURCE=${model_source}"
+echo "MINIFORGE_BASE_URL=${miniforge_base_url}"
