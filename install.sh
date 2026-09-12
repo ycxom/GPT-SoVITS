@@ -336,24 +336,24 @@ if [ "$USE_ROCM" = true ] && [ "$WORKFLOW" = false ]; then
     fi
 fi
 
-if [ "$USE_CUDA" = true ] && [ "$WORKFLOW" = false ]; then
+if [ "$USE_CUDA" = true ]; then
     if [ "$CUDA" = 130 ]; then
         echo -e "${INFO}Installing PyTorch 2.9.1 For CUDA 13.0..."
         run_pip_quiet torch==2.9.1 torchaudio==2.9.1 torchcodec --index-url "https://download.pytorch.org/whl/cu130"
     elif [ "$CUDA" = 128 ]; then
         echo -e "${INFO}Installing PyTorch For CUDA 12.8..."
-        run_pip_quiet torch torchcodec --index-url "https://download.pytorch.org/whl/cu128"
+        run_pip_quiet torch torchaudio torchcodec --index-url "https://download.pytorch.org/whl/cu128"
     elif [ "$CUDA" = 126 ]; then
         echo -e "${INFO}Installing PyTorch For CUDA 12.6..."
-        run_pip_quiet torch torchcodec --index-url "https://download.pytorch.org/whl/cu126"
+        run_pip_quiet torch torchaudio torchcodec --index-url "https://download.pytorch.org/whl/cu126"
     fi
-elif [ "$USE_ROCM" = true ] && [ "$WORKFLOW" = false ]; then
+elif [ "$USE_ROCM" = true ]; then
     echo -e "${INFO}Installing PyTorch For ROCm 6.2..."
-    run_pip_quiet torch torchcodec --index-url "https://download.pytorch.org/whl/rocm6.2"
-elif [ "$USE_CPU" = true ] && [ "$WORKFLOW" = false ]; then
+    run_pip_quiet torch torchaudio torchcodec --index-url "https://download.pytorch.org/whl/rocm6.2"
+elif [ "$USE_CPU" = true ]; then
     echo -e "${INFO}Installing PyTorch For CPU..."
-    run_pip_quiet torch torchcodec --index-url "https://download.pytorch.org/whl/cpu"
-elif [ "$WORKFLOW" = false ]; then
+    run_pip_quiet torch torchaudio torchcodec --index-url "https://download.pytorch.org/whl/cpu"
+else
     echo -e "${ERROR}Unknown Err"
     exit 1
 fi
